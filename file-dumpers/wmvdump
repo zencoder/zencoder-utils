@@ -1,0 +1,639 @@
+#!/usr/bin/env ruby
+
+#
+# WMV Dump
+#
+
+GUIDS = {
+  :asf_advanced_content_encryption_object                            => '43058533-6981-49E6-9B74-AD12CB86D58C',
+  :asf_advanced_mutual_exclusion_object                              => 'A08649CF-4775-4670-8A16-6E35357566CD',
+  :asf_audio_media                                                   => 'F8699E40-5B4D-11CF-A8FD-00805F5C442B',
+  :asf_audio_spread                                                  => 'BFC3CD50-618F-11CF-8BB2-00AA00B4E220',
+  :asf_bandwidth_sharing_exclusive                                   => 'AF6060AA-5197-11D2-B6AF-00C04FD908E9',
+  :asf_bandwidth_sharing_object                                      => 'A69609E6-517B-11D2-B6AF-00C04FD908E9',
+  :asf_bandwidth_sharing_partial                                     => 'AF6060AB-5197-11D2-B6AF-00C04FD908E9',
+  :asf_binary_media                                                  => '3AFB65E2-47EF-40F2-AC2C-70A90D71D343',
+  :asf_bitrate_mutual_exclusion_object                               => 'D6E229DC-35DA-11D1-9034-00A0C90349BE',
+  :asf_codec_list_object                                             => '86D15240-311D-11D0-A3A4-00A0C90348F6',
+  :asf_command_media                                                 => '59DACFC0-59E6-11D0-A3AC-00A0C90348F6',
+  :asf_compatibility_object_bad_spec                                 => '75B22630-668E-11CF-A6D9-00AA0062CE6C',
+  :asp_compatibility_object                                          => '26F18B5D-4584-47EC-9F5F-0E651F0452C9',
+  :asf_content_branding_object                                       => '2211B3FA-BD23-11D2-B4B7-00A0C955FC6E',
+  :asf_content_description_object                                    => '75B22633-668E-11CF-A6D9-00AA0062CE6C',
+  :asf_content_encryption_object                                     => '2211B3FB-BD23-11D2-B4B7-00A0C955FC6E',
+  :asf_content_encryption_system_windows_media_drm_network_devices   => '7A079BB6-DAA4-4E12-A5CA-91D38DC11A8D',
+  :asf_data_object                                                   => '75B22636-668E-11CF-A6D9-00AA0062CE6C',
+  :asf_degradable_jpeg_media                                         => '35907DE0-E415-11CF-A917-00805F5C442B',
+  :asf_digital_signature_object                                      => '2211B3FC-BD23-11D2-B4B7-00A0C955FC6E',
+  :asf_error_correction_object                                       => '75B22635-668E-11CF-A6D9-00AA0062CE6C',
+  :asf_extended_content_description_object                           => 'D2D0A440-E307-11D2-97F0-00A0C95EA850',
+  :asf_extended_content_encryption_object                            => '298AE614-2622-4C17-B935-DAE07EE9289C',
+  :asf_extended_stream_properties_object                             => '14E6A5CB-C672-4332-8399-A96952065B5A',
+  :asf_file_properties_object                                        => '8CABDCA1-A947-11CF-8EE4-00C00C205365',
+  :asf_file_transfer_media                                           => '91BD222C-F21C-497A-8B6D-5AA86BFC0185',
+  :asf_group_mutual_exclusion_object                                 => 'D1465A40-5A79-4338-B71B-E36B8FD6C249',
+  :asf_header_extension_object                                       => '5FBF03B5-A92E-11CF-8EE3-00C00C205365',
+  :asf_header_object                                                 => '75B22630-668E-11CF-A6D9-00AA0062CE6C',
+  :asf_index_object                                                  => 'D6E229D3-35DA-11D1-9034-00A0C90349BE',
+  :asf_index_parameters_object                                       => 'D6E229DF-35DA-11D1-9034-00A0C90349BE',
+  :asf_index_placeholder_object                                      => 'D9AADE20-7C17-4F9C-BC28-8555DD98E2A2',
+  :asf_jfif_media                                                    => 'B61BE100-5B4E-11CF-A8FD-00805F5C442B',
+  :asf_language_list_object                                          => '7C4346A9-EFE0-4BFC-B229-393EDE415C85',
+  :asf_marker_object                                                 => 'F487CD01-A951-11CF-8EE6-00C00C205365',
+  :asf_media_object_index_object                                     => 'FEB103F8-12AD-4C64-840F-2A1D2F7AD48C',
+  :asf_media_object_index_parameters_object                          => '6B203BAD-3F11-48E4-ACA8-D7613DE2CFA7',
+  :asf_metadata_library_object                                       => '44231C94-9498-49D1-A141-1D134E457054',
+  :asf_metadata_object                                               => 'C5F8CBEA-5BAF-4877-8467-AA8C44FA4CCA',
+  :asf_mutex_bitrate                                                 => 'D6E22A01-35DA-11D1-9034-00A0C90349BE',
+  :asf_mutex_language                                                => 'D6E22A00-35DA-11D1-9034-00A0C90349BE',
+  :asf_mutex_unknown                                                 => 'D6E22A02-35DA-11D1-9034-00A0C90349BE',
+  :asf_no_error_correction                                           => '20FB5700-5B55-11CF-A8FD-00805F5C442B',
+  :asf_padding_object                                                => '1806D474-CADF-4509-A4BA-9AABCB96AAE8',
+  :asf_payload_extension_system_content_type                         => 'D590DC20-07BC-436C-9CF7-F3BBFBF1A4DC',
+  :asf_payload_extension_system_encryption_sample_id                 => '6698B84E-0AFA-4330-AEB2-1C0A98D7A44D',
+  :asf_payload_extension_system_file_name                            => 'E165EC0E-19ED-45D7-B4A7-25CBD1E28E9B',
+  :asf_payload_extension_system_pixel_aspect_ratio                   => '1B1EE554-F9EA-4BC8-821A-376B74E4C4B8',
+  :asf_payload_extension_system_sample_duration                      => 'C6BD9450-867F-4907-83A3-C77921B733AD',
+  :asf_payload_extension_system_timecode                             => '399595EC-8667-4E2D-8FDB-98814CE76C1E',
+  :asf_reserved_1                                                    => 'ABD3D211-A9BA-11CF-8EE6-00C00C205365',
+  :asf_reserved_2                                                    => '86D15241-311D-11D0-A3A4-00A0C90348F6',
+  :asf_reserved_3                                                    => '4B1ACBE3-100B-11D0-A39B-00A0C90348F6',
+  :asf_reserved_4                                                    => '4CFEDB20-75F6-11CF-9C0F-00A0C90349CB',
+  :asf_script_command_object                                         => '1EFB1A30-0B62-11D0-A39B-00A0C90348F6',
+  :asf_simple_index_object                                           => '33000890-E5B1-11CF-89F4-00A0C90349CB',
+  :asf_stream_bitrate_properties_object                              => '7BF875CE-468D-11D1-8D82-006097C9A2B2',
+  :asf_stream_prioritization_object                                  => 'D4FED15B-88D3-454F-81F0-ED5C45999E24',
+  :asf_stream_properties_object                                      => 'B7DC0791-A9B7-11CF-8EE6-00C00C205365',
+  :asf_timecode_index_object                                         => '3CB73FD0-0C4A-4803-953D-EDF7B6228F0C',
+  :asf_timecode_index_parameters_object                              => 'F55E496D-9797-4B5D-8C8B-604DFE9BFB24',
+  :asf_video_media                                                   => 'BC19EFC0-5B4D-11CF-A8FD-00805F5C442B',
+  :asf_web_stream_format                                             => 'DA1E6B13-8359-4050-B398-388E965BF00C',
+  :asf_web_stream_media_subtype                                      => '776257D4-C627-41CB-8F81-7AC7FF1C40CC'
+}
+
+def error(msg); puts msg; exit; end
+
+require 'stringio'
+module IoHelpers
+  def ui8; read(1).unpack('C').first; end
+  def ui16; read(2).unpack('n').first; end
+  def ui32; read(4).unpack('N').first; end
+  def ui24; ("\000" + read(3)).unpack('N').first; end
+
+  def byte; read(1).unpack('C').first; end
+  def word; read(2).unpack('v').first; end
+  def dword; read(4).unpack('V').first; end
+  def qword; dword + (dword << 32); end
+
+  # Not positive this is right, but the long is 32-bits.
+  def long; read(4).unpack('V').first; end
+
+  def guid; parts = read(16).unpack('VvvnNn'); sprintf('%08x-%04x-%04x-%04x-%08x%04x', *parts).upcase; end
+  
+  def read_wchars(count)
+    buffer = []
+    count.times do
+      buffer << byte
+      trash = byte
+    end
+    buffer.pop if buffer.last == 0
+    buffer.pack('C*')
+  end
+end
+class IO
+  include IoHelpers
+end
+class StringIO
+  include IoHelpers
+end
+class String
+  def hex
+    unpack('H*').first.scan(/../).join(' ')
+  end
+end
+
+def look_up_object_type(guid)
+  GUIDS.each_pair { |k,v| return k if v == guid }
+  nil
+end
+
+def decode_file_properties_object(size)
+  file_id = @input_file.guid
+  file_size = @input_file.qword
+  creation_date = @input_file.qword
+  data_packets_count = @input_file.qword
+  play_duration = @input_file.qword
+  send_duration = @input_file.qword
+  preroll = @input_file.qword
+  flags = @input_file.dword
+  min_packet_size = @input_file.dword
+  max_packet_size = @input_file.dword
+  max_bitrate = @input_file.dword
+  
+  puts "  File size: #{file_size}"
+  puts "  Data packets: #{data_packets_count}"
+  puts "  Play duration: #{play_duration / 10000000.0} seconds"
+  puts "  Send duration: #{send_duration / 10000000.0} seconds"
+  puts "  Preroll: #{preroll / 1000.0} seconds"
+  puts "  Broadcast flag: #{flags & 1}"
+  puts "  Seekable flag: #{flags & 2}"
+  puts "  Min packet size: #{min_packet_size}"
+  puts "  Max packet size: #{min_packet_size}"
+  puts "  Max bitrate: #{min_packet_size}"
+
+  if min_packet_size == max_packet_size
+    puts "  NOTE: min/max packet size are equal -- treating file as constant packet size."
+    $constant_packet_size = min_packet_size
+  end
+  
+end
+
+def decode_stream_properties_object(size)
+  stream_type_guid = @input_file.guid
+  error_correction_type_guid = @input_file.guid
+  time_offset = @input_file.qword
+  type_specific_data_length = @input_file.dword
+  error_correction_data_length = @input_file.dword
+  flags = @input_file.word
+  reserved = @input_file.dword
+  
+  stream_type = look_up_object_type(stream_type_guid)
+  error_correction_type = look_up_object_type(error_correction_type_guid)
+  puts "  Stream number: #{flags & 127}"
+  puts "  Stream type: #{stream_type || stream_type_guid}"
+  puts "  EC type: #{error_correction_type || error_correction_type_guid}"
+  puts "  Time offset: #{time_offset / 10000000.0} seconds"
+  puts "  Encrypted: #{flags & 32768}"
+  
+  type_specific_data = @input_file.read(type_specific_data_length)
+  tsd = StringIO.new(type_specific_data)
+
+  if stream_type == :asf_audio_media
+    codec_id = tsd.word
+    codec_name = nil
+    case codec_id
+    when 0x161
+      codec_name = 'Windows Media Audio'
+    when 0x162
+      codec_name = 'Windows Media Audio 9 Professional'
+    when 0x163
+      codec_name = 'Windows Media Audio 9 Lossless'
+    when 0x7A21
+      codec_name = 'GSM-AMR (CBR)'
+    when 0x7A22
+      codec_name = 'GSM-AMR (VBR)'
+    when 0x001
+      codec_name = 'PCM Audio'
+    end
+    channels = tsd.word
+    sample_rate = tsd.dword
+    bytes_per_second = tsd.dword
+    block_alignment = tsd.word
+    bits_per_sample = tsd.word
+    puts "  Codec Specific Data:"
+    puts "    Codec ID: #{codec_id}#{" (#{codec_name})" if codec_name}"
+    puts "    Channels: #{channels}"
+    puts "    Sample Rate: #{sample_rate}"
+  elsif stream_type == :asf_video_media
+    encoded_width = tsd.dword
+    encoded_height = tsd.dword
+    reserved = tsd.byte
+    format_data_size = tsd.word
+    format_data_size_2 = tsd.dword
+    image_width = tsd.long
+    image_height = tsd.long
+    reserved2 = tsd.word
+    bits_per_pixel = tsd.word
+    compression_type = tsd.read(4)
+    image_size = tsd.dword
+    ppm_h = tsd.long
+    ppm_v = tsd.long
+    color_count = tsd.dword
+    important_color_count = tsd.dword
+    puts "  Codec Specific Data:"
+    puts "    Encoded Width:  #{encoded_width}"
+    puts "    Encoded Height: #{encoded_height}"
+    puts "    Compression Type: #{compression_type}"
+    puts "    Image Width:  #{image_width}"
+    puts "    Image Height: #{image_height}"
+  end
+  
+  @input_file.read(error_correction_data_length)
+end
+
+def decode_extended_stream_properties_object(size)
+  start_time = @input_file.qword
+  end_time = @input_file.qword
+  data_bitrate = @input_file.dword
+  buffer_size = @input_file.dword
+  initial_buffer_fullness = @input_file.dword
+  a = @input_file.dword
+  a = @input_file.dword
+  a = @input_file.dword
+  a = @input_file.dword
+  flags = @input_file.dword
+  stream_number = @input_file.word
+  stream_language = @input_file.word
+  avg_time_per_frame = @input_file.qword
+  
+  puts "    Stream number: #{stream_number}"
+  puts "    Start time: #{start_time}"
+  puts "    End time: #{end_time}"
+  puts "    Data bitrate: #{data_bitrate}"
+  puts "    Buffer size: #{buffer_size}"
+  puts "    Avg time per frame: #{avg_time_per_frame / 10000000.0} seconds (#{10000000.0 / avg_time_per_frame} fps)"
+  puts "      Reliable flag: #{flags & 1}"
+  puts "      Seekable flag: #{flags & 2}"
+  puts "      No cleanpoint flag: #{flags & 4}"
+  puts "      Resend live cleanpoints flag: #{flags & 8}"
+  
+  @input_file.read(size - 84)
+end
+
+def decode_stream_bitrate_properties_object(size)
+  bitrate_records_count = @input_file.word
+  
+  puts "  Bitrate records count: #{bitrate_records_count}"
+  bitrate_records_count.times do |i|
+    flags = @input_file.word
+    average_bitrate = @input_file.dword
+    stream = flags & 127
+    puts "    Record #{i+1}: stream = #{stream}, average bitrate = #{average_bitrate} bps"
+  end
+end
+
+def decode_codec_list_object(size)
+  reserved = @input_file.guid
+  entries_count = @input_file.dword
+  
+  puts "  Codec list entries: #{entries_count}"
+  entries_count.times do
+    kind = @input_file.word
+    case kind
+    when 1
+      puts "    Codec type: Video"
+    when 2
+      puts "    Codec type: Audio"
+    else
+      puts "    Codec type: Unknown"
+    end
+
+    name_length = @input_file.word
+    name = @input_file.read_wchars(name_length)
+    desc_length = @input_file.word
+    desc = @input_file.read_wchars(desc_length)
+    info_length = @input_file.word
+    info = @input_file.read(info_length)
+    
+    puts "    Codec name: [#{name}]"
+    puts "    Codec desc: [#{desc}]"
+    puts "    Codec info: #{info.hex}"
+  end
+end
+
+def decode_extended_content_description_object(size)
+  count = @input_file.word
+  puts "  Descriptors count: #{count}"
+  count.times do
+    name_length = @input_file.word
+    name = @input_file.read_wchars(name_length / 2)
+    data_type = @input_file.word
+    data_length = @input_file.word
+    value = nil
+    case data_type
+    when 0
+      value = @input_file.read_wchars(data_length / 2)
+    when 1
+      value = @input_file.read(data_length)
+    when 2,3 # bool,dword
+      value = @input_file.dword
+    when 4
+      value = @input_file.qword
+    when 5
+      value = @input_file.word
+    else
+      @input_file.read(data_length)
+    end
+    
+    puts "    Descriptor name: [#{name}]"
+    if ['ASFLeakyBucketPairs'].include?(name)
+      puts "    Descriptor value: -- ignored --"
+    elsif data_type == 0
+      puts "    Descriptor value: [#{value}]"
+    elsif data_type == 1
+      puts "    Descriptor value: #{value.hex}"
+    else
+      puts "    Descriptor value: #{value}"
+    end
+  end
+end
+
+def decode_metadata_object(size)
+  count = @input_file.word
+  puts "    Descriptors count: #{count}"
+  count.times do
+    reserved = @input_file.word
+    stream_number = @input_file.word
+    name_length = @input_file.word
+    data_type = @input_file.word
+    data_length = @input_file.dword
+    name = @input_file.read_wchars(name_length / 2)
+
+    value = nil
+    case data_type
+    when 0
+      value = @input_file.read_wchars(data_length / 2)
+    when 1
+      value = @input_file.read(data_length)
+    when 2
+      value = @input_file.word # bool
+    when 3
+      value = @input_file.dword
+    when 4
+      value = @input_file.qword
+    when 5
+      value = @input_file.word
+    else
+      @input_file.read(data_length)
+    end
+    
+    puts "      Descriptor name: [#{name}]"
+    if data_type == 1
+      puts "      Descriptor value: #{value.hex}"
+    elsif data_type == 0
+      puts "      Descriptor value: [#{value}]"
+    else
+      puts "      Descriptor value: #{value}"
+    end
+  end
+end
+
+def decode_compatibility_object(size)
+  profile = @input_file.byte
+  mode = @input_file.byte
+  puts "    Profile: #{profile}"
+  puts "    Mode: #{mode}"
+end
+
+def decode_header_extension_object(size)
+  reserved1 = @input_file.guid
+  reserved2 = @input_file.word
+  data_size = @input_file.dword
+  
+  puts "  warning: header extension reserved1 is not correct (#{reserved1})!" unless reserved1 == GUIDS[:asf_reserved_1]
+  puts "  warning: header extension reserved2 is not correct!" unless reserved2 == 6
+  
+  puts "  WARNING: header extension size is questionable!" unless data_size == (size - 46)
+  
+  bytes_left = data_size
+
+  while bytes_left > 0
+
+    object_id = @input_file.guid
+    object_type = look_up_object_type(object_id)
+    object_size = @input_file.qword
+
+    puts "  Extended Object Type: #{object_type || object_id}"
+    puts "  Extended Object Size: #{object_size}"
+    
+    if object_type == :asf_extended_stream_properties_object
+      decode_extended_stream_properties_object(object_size)
+    elsif object_type == :asf_metadata_object
+      decode_metadata_object(object_size)
+    elsif object_type == :asp_compatibility_object
+      decode_compatibility_object(object_size)
+    else
+      @input_file.read(object_size - 24)
+    end
+
+    bytes_left -= object_size
+  end
+end
+
+
+
+####################################################################################
+####################################################################################
+
+error "Please specify a file to inspect." unless ARGV.length > 0
+
+input_filename = ARGV.first
+error "Input file not found." unless File.exist?(input_filename)
+
+file_size = File.size(input_filename)
+@input_file = File.open(input_filename)
+
+signature = @input_file.guid
+error "Not a WMV file." unless signature == GUIDS[:asf_header_object]
+
+puts
+puts "INFO:"
+puts "Filename: " + File.basename(input_filename)
+puts "Size: #{file_size}"
+
+puts
+puts "HEADER:"
+
+header_size = @input_file.qword
+header_object_count = @input_file.dword
+reserved1 = @input_file.byte
+reserved2 = @input_file.byte
+
+puts "Header size: #{header_size}"
+puts "Header objects: #{header_object_count}"
+if reserved1 != 1
+  puts "WARNING: Reserved field 1 should be 1!"
+end
+if reserved2 != 2
+  puts "WARNING: Reserved field 2 should be 2 -- decoders are supposed to fail on this condition!"
+end
+
+header_object_count.times do
+
+  object_id = @input_file.guid
+  object_type = look_up_object_type(object_id)
+  object_size = @input_file.qword
+
+  puts "Object Type: #{object_type || object_id}"
+  puts "Object Size: #{object_size}"
+  
+  if object_type == :asf_header_extension_object
+    decode_header_extension_object(object_size)
+  elsif object_type == :asf_file_properties_object
+    decode_file_properties_object(object_size)
+  elsif object_type == :asf_stream_properties_object
+    decode_stream_properties_object(object_size)
+  elsif object_type == :asf_stream_bitrate_properties_object
+    decode_stream_bitrate_properties_object(object_size)
+  elsif object_type == :asf_codec_list_object
+    decode_codec_list_object(object_size)
+  elsif object_type == :asf_extended_content_description_object
+    decode_extended_content_description_object(object_size)
+  else
+    @input_file.read(object_size - 24)
+  end
+  
+end
+
+def read_varying_type(length_type)
+  case length_type
+  when 0
+    0
+  when 1
+    @input_file.byte
+  when 2
+    @input_file.word
+  when 3
+    @input_file.dword
+  end
+end
+
+puts
+puts "BODY: (offset #{@input_file.pos})"
+
+data_guid = @input_file.guid
+data_size = @input_file.qword
+file_id = @input_file.guid
+packet_count = @input_file.qword
+reserved = @input_file.word
+
+error "ERROR: reserved value should be 0x0101" unless reserved == 0x0101
+
+error "ERROR: data object not correct GUID" unless data_guid == GUIDS[:asf_data_object]
+puts "Data size: #{data_size}"
+puts "Data packets: #{packet_count}"
+if look_up_object_type(file_id)
+  puts "File ID: #{look_up_object_type(file_id)}"
+else
+  puts "Unknown file ID: #{file_id}"
+end
+
+packet_count.times do |packet_number|
+  packet_start = @input_file.pos
+  
+  puts "Packet #{packet_number + 1}: (offset #{packet_start})"
+  ec_flags = @input_file.byte
+
+  if ec_flags & 128
+    ec_len = ec_flags & 15
+    puts "  Error correction present. (#{ec_len} bytes)"
+    if (ec_flags & 0b01110000) > 0
+      puts "  WARNING: supposedly other data is present that wmvdump doesn't account for yet!"
+    end
+    ec_data = @input_file.read(ec_len)
+    
+    length_flags = @input_file.byte
+  else
+    length_flags = ec_flags
+  end
+
+  property_flags = @input_file.byte
+
+  multi_payload = length_flags & 1
+  sequence_type = (length_flags >> 1) & 3
+  padding_length_type = (length_flags >> 3) & 3
+  packet_length_type = (length_flags >> 5) & 3
+  
+  replicated_data_length_type = property_flags & 3
+  offset_into_media_object_length_type = (property_flags >> 2) & 3
+  media_object_number_length_type = (property_flags >> 4) & 3
+  stream_number_length_type = (property_flags >> 6) & 3
+
+  puts "        multiple payloads present = #{multi_payload}"
+  puts "        sequence_type = #{sequence_type}"
+  puts "        padding_length_type = #{padding_length_type}"
+  puts "        packet_length_type = #{packet_length_type}"
+  puts "        replicated_data_length_type = #{replicated_data_length_type}"
+  puts "        offset_into_media_object_length_type = #{offset_into_media_object_length_type}"
+  puts "        media_object_number_length_type = #{media_object_number_length_type}"
+  puts "        stream_number_length_type = #{stream_number_length_type}"
+
+  packet_length = read_varying_type(packet_length_type)
+  sequence = read_varying_type(sequence_type)
+  padding_length = read_varying_type(padding_length_type)
+  send_time = @input_file.dword
+  duration = @input_file.word
+
+  puts "  Packet length: #{packet_length}"
+  if packet_length == 0 && $constant_packet_size.to_i > 0
+    packet_length = $constant_packet_size
+    puts "    Overriding with constant packet size: #{packet_length}"
+  end
+  puts "  Sequence: #{sequence}"
+  puts "  Padding length: #{padding_length}"
+  puts "  Send time: #{send_time / 1000.0} seconds"
+  puts "  Duration: #{duration / 1000.0} seconds"
+
+  if multi_payload > 0
+    
+    payload_flags = @input_file.byte
+    payload_count = payload_flags & 0b00111111
+    payload_length_type = (payload_flags >> 6) & 3
+    
+    puts "  Multiple payloads: #{payload_count}"
+    
+    payload_count.times do |payload_number|
+      puts "  Payload #{payload_number + 1}: (offset #{@input_file.pos})"
+      
+      stream_number = @input_file.byte
+      is_keyframe = stream_number & 128
+      media_object_number = read_varying_type(media_object_number_length_type)
+      offset_into_media_object = read_varying_type(offset_into_media_object_length_type)
+      replicated_data_length = read_varying_type(replicated_data_length_type)
+      
+      if replicated_data_length == 1
+        error "ERROR: compressed payload!"
+      else
+        if replicated_data_length > 1
+          replicated_data = @input_file.read(replicated_data_length)
+        end
+      
+        payload_length = read_varying_type(payload_length_type)
+        payload_data = @input_file.read(payload_length)
+
+        puts "    Stream: #{stream_number & 127}"
+        puts "    Keyframe: " + (is_keyframe > 0 ? 'yes' : 'no')
+        puts "    Replicated data length: #{replicated_data_length}"
+        puts "    Payload length: #{payload_length}"
+
+        if replicated_data_length > 1
+          puts "    Replicated data, size of media object: #{replicated_data[0,4].unpack('V').first} bytes"
+          puts "    Replicated data, pts of media object: #{replicated_data[4,4].unpack('V').first} ms"
+        end
+
+      end
+    end
+
+    puts "  Padding length: #{padding_length}"
+    padding = @input_file.read(padding_length)
+    
+  else
+    stream_number = @input_file.byte
+    is_keyframe = stream_number & 128
+    media_object_number = read_varying_type(media_object_number_length_type)
+    offset_into_media_object = read_varying_type(offset_into_media_object_length_type)
+    replicated_data_length = read_varying_type(replicated_data_length_type)
+    
+    puts "  Stream: #{stream_number & 127}"
+    puts "  Keyframe: " + (is_keyframe > 0 ? 'yes' : 'no')
+    puts "  Media object number: #{media_object_number}"
+    puts "  Offset into media object: #{offset_into_media_object}"
+    puts "  Replicated data length: #{replicated_data_length}"
+    if replicated_data_length > 1
+      replicated_data = @input_file.read(replicated_data_length)
+      puts "    Replicated data, size of media object: #{replicated_data[0,4].unpack('V').first} bytes"
+      puts "    Replicated data, pts of media object: #{replicated_data[4,4].unpack('V').first} ms"
+    end
+
+
+    heading_length = @input_file.pos - packet_start
+    
+    payload_data = @input_file.read(packet_length - heading_length - padding_length)
+    
+    padding = @input_file.read(padding_length)
+  end
+  
+end
+
+puts
+close(input_file) rescue nil

@@ -1,0 +1,577 @@
+#!/usr/bin/env ruby
+
+#
+# AVI Dump
+#
+
+#
+# useful resources:
+#   http://www.jmcgowan.com/avitech.html
+#   http://www.morgan-multimedia.com/download/odmlff2.pdf
+#   http://www.alexander-noe.com/video/documentation/avi.pdf
+#   http://wiki.multimedia.cx/index.php?title=AVI
+
+def error(msg); puts msg; exit; end
+require 'stringio'
+module IoHelpers
+  def ui8; read(1).unpack('C').first; end
+  def ui16; read(2).unpack('v').first; end
+  def ui24; ("\000" + read(3)).unpack('V').first; end
+  def ui32; read(4).unpack('V').first; end
+
+  def i8; read(1).unpack('c').first; end
+  def i16; read(2).unpack('s').first; end
+  def i24; ("\000" + read(3)).unpack('l').first; end
+  def i32; read(4).unpack('l').first; end
+end
+class IO
+  include IoHelpers
+end
+class StringIO
+  include IoHelpers
+end
+class String
+  def hex
+    unpack('H*').first.scan(/../).join(' ')
+  end
+end
+
+# Colored print...
+def cprint(message, color = :none)
+  colors = {
+    :black => '0;30',
+    :dark_gray => '1;30',
+    :dark_grey => '1;30',
+    :gray => '0',
+    :grey => '0',
+    :dark_red => '0;31',
+    :red => '1;31',
+    :dark_green => '0;32',
+    :green => '1;32',
+    :dark_yellow => '0;33',
+    :yellow => '1;33',
+    :dark_blue => '0;34',
+    :blue => '1;34',
+    :dark_purple => '0;35',
+    :dark_magenta => '0;35',
+    :purple => '1;35',
+    :magenta => '1;35',
+    :dark_cyan => '0;36',
+    :cyan => '1;36',
+    :dark_white => '0;37',
+    :white => '1;37'
+  }
+  if colors[color]
+    print "\x1b[1;#{colors[color]}m#{message}\x1b[0m"
+  else
+    print message
+  end
+end
+
+def cputs(message, color)
+  cprint(message+"\n", color)
+end
+
+def rainbow
+  cprint "Test", :black
+  cprint "Test", :dark_gray
+  cprint "Test", :gray
+  cprint "Test", :dark_white
+  cputs "Test", :white
+
+  cprint "Test", :dark_purple
+  cputs "Test", :purple
+  cprint "Test", :dark_red
+  cputs "Test", :red
+  cprint "Test", :dark_yellow
+  cputs "Test", :yellow
+  cprint "Test", :dark_green
+  cputs "Test", :green
+  cprint "Test", :dark_cyan
+  cputs "Test", :cyan
+  cprint "Test", :dark_blue
+  cputs "Test", :blue
+end
+
+
+class Chunk
+  attr_accessor :kind, :size, :data, :total_size
+
+  def self.create(kind, *args)
+    case kind
+    when 'idx1'
+      IndexChunk.new(kind, *args)
+    when 'avih'
+      AviHeaderChunk.new(kind, *args)
+    when 'strh'
+      StreamHeaderChunk.new(kind, *args)
+    when 'strf'
+      StreamFormatChunk.new(kind, *args)
+    else
+      new(kind, *args)
+    end
+  end
+
+  def initialize(kind = nil, prefix = '')
+    @kind = kind
+    @size = 0
+    @total_size = 0
+    @data = ''
+    @prefix = prefix
+    @color = :none
+  end
+  
+  def size=(amount)
+    @size = amount
+    @total_size = amount + 8
+  end
+  
+  def data=(bytes)
+    # By default, throw out the data so we don't waste memory.
+  end
+  
+  def pputs(string, color = @color)
+    cputs(@prefix+string, color)
+  end
+
+  def pprint(string, color = @color)
+    cprint(@prefix+string, color)
+  end
+  
+  def set_color(new_color)
+    @color = new_color || :none
+  end
+end
+
+class IndexChunk < Chunk
+  attr_accessor :index
+  
+  def data=(bytes)
+    @index = []
+    while bytes.length > 16
+      @index << { :kind => bytes[0,4], :pos => bytes[8,4].unpack('V').first, :length => bytes[12,4].unpack('V').first }
+      bytes = bytes[16..-1]
+    end
+    set_color :cyan
+    pputs "Parsed index with #{@index.length} entries:"
+    @index.each do |entry|
+      pputs "  Entry: #{entry.inspect}"
+    end
+  end
+end
+
+class AviHeaderChunk < Chunk
+  def data=(bytes)
+    set_color :cyan
+    pputs "  AVI HEADER:", :green
+    header = StringIO.new(bytes)
+    pputs "  MicroSecPerFrame: #{header.ui32}"
+    pputs "  MaxBytesPerSec:   #{header.ui32}"
+    pputs "  Pad Granularity:  #{header.ui32}", :dark_gray
+    pputs "  Flags:            #{header.ui32}"
+    pputs "  Total Frames:     #{header.ui32}"
+    pputs "  Initial Frames:   #{header.ui32}"
+    pputs "  Streams:          #{header.ui32}"
+    pputs "  Buffer Size:      #{header.ui32}"
+    pputs "  Width:            #{header.ui32}"
+    pputs "  Height:           #{header.ui32}"
+    4.times { pputs "  Reserved (0):     #{header.ui32}", :dark_gray }
+  end
+end
+
+class StreamHeaderChunk < Chunk
+  attr_accessor :format_type
+  def data=(bytes)
+    set_color :cyan
+    pputs "  STREAM HEADER:", :green
+    header = StringIO.new(bytes)
+    @format_type = header.read(4)
+    pputs "  Type:    #{@format_type}"
+    pputs "  Handler: #{header.read(4)}"
+    pputs "  Flags:          #{header.ui32}"
+    # #define AVISF_DISABLED 0x00000001
+    # #define AVISF_VIDEO_PALCHANGES 0x00010000
+    pputs "  Priority:       #{header.ui32}"
+    pputs "  Initial Frames: #{header.ui32}" # How far ahead audio is from video
+    scale = header.ui32
+    rate = header.ui32
+    fps = rate.to_f / scale
+    pputs "  Scale:          #{scale}" # Timescale ...  rate/scale = samples per second (frame rate)
+    pputs "  Rate:           #{rate}"
+    pputs "    FPS:          #{sprintf('%0.3f',fps)}", :yellow
+    pputs "  Start:          #{header.ui32}" # Start time / delay
+    len = header.ui32
+    pprint "  Length:         #{len} "
+    pputs "(#{sprintf('%0.3f',len * scale.to_f / rate)} seconds)", :yellow
+    pputs "  Buffer Size:    #{header.ui32}"
+    pputs "  Quality:        #{header.i32} (1-10000 range, -1 = driver default)"
+    pputs "  Sample Size:    #{header.ui32} (0=varying)"
+    pputs "  Frame:          (#{header.ui16},#{header.ui16})-(#{header.ui16},#{header.ui16})"
+  end
+end
+
+class StreamFormatChunk < Chunk
+  attr_accessor :format_type
+  def initialize(kind = nil, prefix = '', format_type = nil)
+    super(kind, prefix)
+    @format_type = format_type
+  end
+  
+  def data=(bytes)
+    set_color :cyan
+    pputs "  STREAM FORMAT:", :green
+    header = StringIO.new(bytes)
+    
+    if format_type == 'vids'
+      # BITMAPINFO
+      
+      header.ui32 # Struct size
+      width = header.i32
+      height = header.i32
+      pputs "  Width:       #{width}"
+      pputs "  Height:      #{height}"
+      pputs "  Planes:      #{header.ui16}"
+      pputs "  BitCount:    #{header.ui16}"
+      pputs "  Compression: #{header.read(4)}"
+      pputs "  SizeImage:   #{header.ui32}"
+      pputs "  xPPM:        #{header.i32}"
+      pputs "  yPPM:        #{header.i32}"
+      
+    elsif format_type == 'auds'
+      # WAVEFORMATEX
+      codec_id = header.ui16
+      codec_name = nil
+      case codec_id
+      when 0x161
+        codec_name = 'Windows Media Audio'
+      when 0x162
+        codec_name = 'Windows Media Audio 9 Professional'
+      when 0x163
+        codec_name = 'Windows Media Audio 9 Lossless'
+      when 0x7A21
+        codec_name = 'GSM-AMR (CBR)'
+      when 0x7A22
+        codec_name = 'GSM-AMR (VBR)'
+      when 0x001
+        codec_name = 'PCM Audio'
+      end
+      channels = header.ui16
+      sample_rate = header.ui32
+      bytes_per_second = header.ui32
+      block_alignment = header.ui16
+      bits_per_sample = header.ui16
+      pputs "  Codec ID: #{codec_id}#{" (#{codec_name})" if codec_name}"
+      pputs "  Channels: #{channels}"
+      pputs "  Sample Rate: #{sample_rate}"
+    else
+      pputs "  Other stream format type: #{format_type}", :yellow
+    end
+    
+    # pputs "  Type:    #{header.read(4)}"
+    # pputs "  Handler: #{header.read(4)}"
+    # pputs "  Flags:          #{header.ui32}"
+    # # #define AVISF_DISABLED 0x00000001
+    # # #define AVISF_VIDEO_PALCHANGES 0x00010000
+    # pputs "  Priority:       #{header.ui32}"
+    # pputs "  Initial Frames: #{header.ui32}" # How far ahead audio is from video
+    # scale = header.ui32
+    # rate = header.ui32
+    # fps = rate.to_f / scale
+    # pputs "  Scale:          #{scale}" # Timescale ...  rate/scale = samples per second (frame rate)
+    # pputs "  Rate:           #{rate}"
+    # pputs "    FPS:          #{sprintf('%0.3f',fps)}", :yellow
+    # pputs "  Start:          #{header.ui32}" # Start time / delay
+    # len = header.ui32
+    # pputs "  Length:         #{len} (#{sprintf('%0.3f',len * scale.to_f / rate)} seconds)" # Based on timescale
+    # pputs "  Buffer Size:    #{header.ui32}"
+    # pputs "  Quality:        #{header.i32} (1-10000 range, -1 = driver default)"
+    # pputs "  Sample Size:    #{header.ui32} (0=varying)"
+    # pputs "  Frame:          (#{header.ui16},#{header.ui16})-(#{header.ui16},#{header.ui16})"
+  end
+end
+
+class List
+  attr_accessor :kind, :size, :entries, :total_size
+  def initialize(kind = nil)
+    @kind = kind
+    @size = 0
+    @total_size = 0
+    @entries = []
+  end
+
+  def <<(item)
+    @entries << item
+    @size += item.total_size
+    @total_size = @size + 12
+    @entries
+  end
+
+  def size=(amount)
+    @size = amount
+    @total_size = amount + 12
+  end
+end
+
+CHUNK_DESCRIPTIONS = {
+  'wb' => 'sound data',
+  'db' => 'video data',
+  'dc' => 'compressed video data',
+  'pc' => 'palette change'
+}
+
+error "Please specify a file to inspect." unless ARGV.length > 0
+
+input_filename = ARGV.first
+error "Input file not found." unless File.exist?(input_filename)
+
+file_size = File.size(input_filename)
+@input_file = File.open(input_filename)
+
+signature = @input_file.read(12)
+error "Not an AVI file." unless signature[0,4] == 'RIFF' && signature[8,4] == 'AVI '
+data_size = signature[4,4].unpack('V').first
+
+puts "INFO:"
+puts "Filename:  " + File.basename(input_filename)
+puts "Size:      #{file_size}"
+puts "Data Size: #{data_size}"
+
+$current_format_type = nil
+
+def read_list(prefix = '')
+  size = @input_file.ui32
+  kind = @input_file.read(4)
+  data_size = size - 4
+  list = List.new(kind)
+  puts "#{prefix}Found a '#{kind}' LIST of #{size} bytes at position #{@input_file.pos - 12}!"
+  
+  while (list.size < data_size) && (item = read_item(prefix + '    '))
+    # puts "#{kind} list size: #{list.size}, item size: #{item.total_size}, Expected size: #{data_size}"
+    list << item
+    if item.kind_of?(StreamHeaderChunk)
+      $current_format_type = item.format_type
+    end
+  end
+
+  list
+end
+
+def read_chunk(kind, prefix = '')
+  if kind == 'strf'
+    c = Chunk.create(kind, prefix, $current_format_type)
+  else
+    c = Chunk.create(kind, prefix)
+  end
+  c.size = @input_file.ui32
+  
+  chunk_stream = kind[0,2]
+  chunk_type = kind[2,2]
+  
+  print "#{prefix}Found a '#{kind}' chunk of #{c.size} bytes at position #{@input_file.pos - 8}!"
+  if chunk_stream[0,1] == '0'
+    print "  (Stream #{chunk_stream} #{CHUNK_DESCRIPTIONS[chunk_type]})"
+  end
+  puts
+  
+  c.data = @input_file.read(c.size)
+  
+  c
+end
+
+def read_item(prefix = '')
+  if (@input_file.pos % 2) == 1
+    extra = @input_file.read(1)
+    cputs "Dumping extra byte!", :red
+  end
+
+  kind = @input_file.read(4)
+  return nil if kind.to_s.length < 4
+  
+  if kind == 'LIST'
+    read_list(prefix)
+  else
+    read_chunk(kind, prefix)
+  end
+end
+
+while item = read_item
+  if item.is_a?(Array)
+    # puts "Found a LIST with #{item.entries.length} entries!"
+  else
+    # puts "Found a '#{item.kind}' chunk!"
+  end
+end
+
+exit
+
+puts
+puts "HEADER:"
+
+version = input_file.ui8
+puts "Version: #{version}"
+
+flags = input_file.ui8
+puts "Has audio tags: " + ((flags & 0x4 > 0) ? 'yes' : 'no')
+puts "Has video tags: " + ((flags & 0x1 > 0) ? 'yes' : 'no')
+if (flags & 0b11111010) > 0
+  puts "WARNING: reserved flag bytes are not zero!"
+end
+
+data_loc = input_file.ui32
+puts "Data offset: #{data_loc}"
+
+puts
+puts "BODY:"
+
+more_to_read = true
+while more_to_read
+
+  prev_tag_size = input_file.ui32
+  
+  if input_file.eof?
+    puts "LASTTAG:"
+    puts "  Prev tag size: #{prev_tag_size}"
+
+    more_to_read = false
+    next
+  end
+
+  puts "TAG: (offset #{input_file.pos})"
+  puts "  Prev tag size: #{prev_tag_size}"
+  
+  kind = input_file.ui8
+  size = input_file.ui24
+  timestamp = input_file.ui24
+  timestamp_ext = input_file.ui8
+  stream_id = input_file.ui24
+  
+  kind_name = tag_kinds[kind] || 'unknown'
+  
+  puts "  Type: #{kind} (#{kind_name})"
+  puts "  Size: #{size}"
+  puts "  Time: #{timestamp_ext*(2**24) + timestamp / 1000.0}"
+  puts "  Stream ID: #{stream_id}"
+
+  next if size == 0
+
+  if kind_name == 'audio'
+    format_flags = input_file.ui8
+    format = (format_flags >> 4) & 15
+    rate = (2 ** ((format_flags >> 2) & 3) * 5512.5).round
+    bits = ((format_flags >> 1) & 1) * 8 + 8
+    channels = format_flags & 1 + 1
+    puts "  Audio format: #{format} (#{audio_formats[format] || 'unknown'})"
+    puts "  Audio rate: #{rate}"
+    puts "  Audio bits: #{bits}"
+    puts "  Audio channels: #{channels}"
+    
+    input_file.read(size - 1)
+
+  elsif kind_name == 'video'
+    format_flags = input_file.ui8
+    frame_type = (format_flags >> 4) & 15
+    codec_id = format_flags & 0xf
+    
+    puts "  Video frame type: #{frame_type} (#{video_frame_types[frame_type] || 'unknown'})"
+    puts "  Video codec: #{codec_id} (#{video_codecs[codec_id] || 'unknown'})"
+    
+    if codec_id == 4 #&& frame_type == 1 # vp6 keyframe
+      stream_bytes = input_file.read(9)
+
+      vp6_frame_mode = (stream_bytes[1] >> 7) & 1
+      vp6_q_param = (stream_bytes[1] >> 1) & 0b00111111
+      vp6_marker = stream_bytes[1] & 1
+      
+      puts "  VP6 Frame Mode: #{vp6_frame_mode}"
+      puts "  VP6 Q Param: #{vp6_q_param}"
+      puts "  VP6 Marker: #{vp6_marker} (#{vp6_marker == 1 ? 'VP60' : 'VP61/VP62'})"
+
+      offset = 2
+      # if frame_mode==0, there's an extra byte of data.
+      if vp6_frame_mode == 0
+        vp6_version = (stream_bytes[2] >> 3) & 0b00011111
+        vp6_version2 = (stream_bytes[2] >> 1) & 3
+        vp6_interlaced = stream_bytes[2] & 1
+        
+        puts "  VP6 Version: #{vp6_version}"
+        puts "  VP6 Version2: #{vp6_version2}"
+        puts "  VP6 Interlaced: #{vp6_interlaced}"
+
+        offset += 1
+
+        # if marker==1 or version2==0, there are 2 more extra data bytes
+        if vp6_marker == 1 || vp6_version2 == 0
+          vp6_secondary_buffer_offset = stream_bytes[offset] << 8 + stream_bytes[offset + 1]
+          puts "  VP6 Secondary Buffer Offset: #{vp6_secondary_buffer_offset}"
+
+          offset += 2
+        end
+
+        # Now offset points to the resolution values: [h_mb,w_mb,h_disp,w_disp]
+        disp_width = stream_bytes[offset+3] * 16
+        h_adjust = (stream_bytes[0] >> 4) & 15
+        disp_height = stream_bytes[offset+2] * 16
+        v_adjust = stream_bytes[0] & 0x0f
+
+        width = disp_width - h_adjust
+        height = disp_height - v_adjust
+
+        puts "  Video width: #{width} (#{disp_width} - #{h_adjust})"
+        puts "  Video height: #{height} (#{disp_height} - #{v_adjust})"
+      else
+        if vp6_marker == 1
+          vp6_secondary_buffer_offset = stream_bytes[offset] << 8 + stream_bytes[offset + 1]
+          puts "  VP6 Secondary Buffer Offset: #{vp6_secondary_buffer_offset}"
+        end
+      end
+      
+      
+      input_file.read(size - 10)
+
+    elsif codec_id == 5 && frame_type == 1 # vp6a keyframe
+      stream_bytes = input_file.read(9)
+
+      disp_width = stream_bytes[7] * 16
+      h_adjust = (stream_bytes[0] >> 4) & 15
+      disp_height = stream_bytes[6] * 16
+      v_adjust = stream_bytes[0] & 0x0f
+
+      width = disp_width - h_adjust
+      height = disp_height - v_adjust
+
+      puts "  Video width: #{width} (#{disp_width} - #{h_adjust})"
+      puts "  Video height: #{height} (#{disp_height} - #{v_adjust})"
+
+      input_file.read(size - 10)
+    else
+
+      input_file.read(size - 1)
+    end
+
+  elsif kind_name == 'script'
+    input_file.ui8 # 1 byte of junk?
+    tag_pos = 1
+
+    name_len = input_file.ui16
+    puts "  Script object name length: #{name_len}"
+    tag_pos += 2
+
+    name = input_file.read(name_len)
+    tag_pos += name_len
+
+    puts "  Script object name: #{name}"
+    
+    data_type = input_file.ui8
+    tag_pos += 1
+    puts "  Script object type: #{data_type}"
+    
+    input_file.read(size - tag_pos)
+  else
+    input_file.read(size)
+  end
+  
+end
+
+
+puts
+close(input_file) rescue nil

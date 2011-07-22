@@ -1,0 +1,423 @@
+#!/usr/bin/env ruby
+
+#
+# FLV Dump
+#
+
+def error(msg); puts msg; exit; end
+
+class IO
+  def ui8; read(1).unpack('C').first; end
+  def ui16; read(2).unpack('n').first; end
+  def ui32; read(4).unpack('N').first; end
+  def ui24; ("\000" + read(3)).unpack('N').first; end
+  def si24; v = ui24; v >= (2**23) ? v-(2**24) : v; end
+end
+
+class Bitstream
+  attr_accessor :bit_offset
+  
+  def initialize(data_string, starting_byte_offset = 0)
+    @data = data_string
+    @bit_offset = 0
+    @pos = starting_byte_offset
+  end
+
+  def nextbits(count)
+    raise "nextbits of more than 16 not implemented" if count > 16
+    getbits_internal(count, false)
+  end
+
+  # Return an integer of the next _count_ bits and increment @bit_offset so that
+  # subsequent calls will get following bits.
+  def getbits(count)
+    value = 0
+    while count > 16
+      value += (getbits_internal(16) << 16)
+      count -= 16
+    end
+    value += getbits_internal(count)
+  end
+  
+  # Do getbits, with up to 16 bits.
+  def getbits_internal(count, increment_position = true)
+    return 0 if count > 16 || count < 1
+    byte = @bit_offset / 8
+    bit  = @bit_offset % 8
+    val = (@data[@pos + byte].to_i << 16) + (@data[@pos + byte + 1].to_i << 8) + @data[@pos + byte + 2].to_i
+    val = (val << bit) & 16777215
+    val = val >> (24 - count)
+
+    @bit_offset += count if increment_position
+    return val
+  end
+  
+  def append(data_string)
+    @data << data_string
+  end
+  
+  # Remove any data that we've moved past already, so we don't build up too much in memory.
+  def pop
+    byte = @bit_offset / 8
+    bit = @bit_offset % 8
+    
+    @pos += byte
+    @bit_offset = bit
+    
+    if @pos > 0
+      @data = @data[@pos..-1]
+      @pos = 0
+    end
+    
+    true
+  end
+end
+
+
+tag_kinds = {
+  8 => 'audio',
+  9 => 'video',
+  18 => 'script'
+}
+audio_formats = {
+  0 => 'pcm, platform endian',
+  1 => 'adpcm',
+  2 => 'mp3',
+  3 => 'pcm, little endian',
+  4 => 'nellymoser 16-kHz',
+  5 => 'nellymoser 8-kHz',
+  6 => 'nellymoser',
+  7 => 'G.711 a-law',
+  8 => 'G.711 mu-law',
+  9 => 'reserved',
+  10 => 'aac',
+  11 => 'speex',
+  14 => 'mp3 8-kHz',
+  15 => 'device-specific'
+}
+video_frame_types = {
+  1 => 'keyframe',
+  2 => 'inter frame',
+  3 => 'disposable inter frame',
+  4 => 'generated keyframe',
+  5 => 'video info/command frame'
+}
+video_codecs = {
+  1 => 'jpeg',
+  2 => 'h.263',
+  3 => 'screen video',
+  4 => 'vp6',
+  5 => 'vp6a',
+  6 => 'screen video 2',
+  7 => 'avc'
+}
+
+mpeg4_audio_object_types = {
+  0 => "Null",
+  1 => "AAC Main",
+  2 => "AAC LC (Low Complexity)",
+  3 => "AAC SSR (Scalable Sample Rate)",
+  4 => "AAC LTP (Long Term Prediction)",
+  5 => "SBR (Spectral Band Replication)",
+  6 => "AAC Scalable",
+  7 => "TwinVQ",
+  8 => "CELP (Code Excited Linear Prediction)",
+  9 => "HXVC (Harmonic Vector eXcitation Coding)",
+  10 => "Reserved",
+  11 => "Reserved",
+  12 => "TTSI (Text-To-Speech Interface)",
+  13 => "Main Synthesis",
+  14 => "Wavetable Synthesis",
+  15 => "General MIDI",
+  16 => "Algorithmic Synthesis and Audio Effects",
+  17 => "ER (Error Resilient) AAC LC",
+  18 => "Reserved",
+  19 => "ER AAC LTP",
+  20 => "ER AAC Scalable",
+  21 => "ER TwinVQ",
+  22 => "ER BSAC (Bit-Sliced Arithmetic Coding)",
+  23 => "ER AAC LD (Low Delay)",
+  24 => "ER CELP",
+  25 => "ER HVXC",
+  26 => "ER HILN (Harmonic and Individual Lines plus Noise)",
+  27 => "ER Parametric",
+  28 => "SSC (SinuSoidal Coding)",
+  29 => "PS (Parametric Stereo)",
+  30 => "MPEG Surround",
+  31 => "(Escape value)",
+  32 => "Layer-1",
+  33 => "Layer-2",
+  34 => "Layer-3",
+  35 => "DST (Direct Stream Transfer)",
+  36 => "ALS (Audio Lossless)",
+  37 => "SLS (Scalable LosslesS)",
+  38 => "SLS non-core",
+  39 => "ER AAC ELD (Enhanced Low Delay)",
+  40 => "SMR (Symbolic Music Representation) Simple",
+  41 => "SMR Main",
+  42 => "USAC (Unified Speech and Audio Coding) (no SBR)",
+  43 => "SAOC (Spatial Audio Object Coding)",
+  44 => "LD MPEG Surround",
+  45 => "USAC"
+}
+
+mpeg4_audio_frequencies = {
+  0 => "96000",
+  1 => "88200",
+  2 => "64000",
+  3 => "48000",
+  4 => "44100",
+  5 => "32000",
+  6 => "24000",
+  7 => "22050",
+  8 => "16000",
+  9 => "12000",
+  10 => "11025",
+  11 => "8000",
+  12 => "7350",
+  13 => "Reserved",
+  14 => "Reserved"
+}
+
+mpeg4_channel_configurations = {
+  0 => "Defined in AOT Specifc Config",
+  1 => "1 channel: Center",
+  2 => "2 channels: Left, Right",
+  3 => "3 channels: Center, Left, Right",
+  4 => "4 channels: C, L, R rear_C",
+  5 => "5 channels: C, L, R rear_L, rear_R",
+  6 => "6 channels: C, L, R rear_L, rear_R, LFE",
+  7 => "8 channels: C, L, R side_L, side_R, rear_L, rear_R, LFE"
+}
+
+error "Please specify a file to inspect." unless ARGV.length > 0
+
+input_filename = ARGV.first
+error "Input file not found." unless File.exist?(input_filename)
+
+file_size = File.size(input_filename)
+input_file = File.open(input_filename)
+
+signature = input_file.read(3)
+error "Not an FLV file." unless signature == 'FLV'
+
+puts
+puts "INFO:"
+puts "Filename: " + File.basename(input_filename)
+puts "Size: #{file_size}"
+
+puts
+puts "HEADER:"
+
+version = input_file.ui8
+puts "Version: #{version}"
+
+flags = input_file.ui8
+puts "Has audio tags: " + ((flags & 0x4 > 0) ? 'yes' : 'no')
+puts "Has video tags: " + ((flags & 0x1 > 0) ? 'yes' : 'no')
+if (flags & 0b11111010) > 0
+  puts "WARNING: reserved flag bytes are not zero!"
+end
+
+data_loc = input_file.ui32
+puts "Data offset: #{data_loc}"
+
+puts
+puts "BODY:"
+
+more_to_read = true
+while more_to_read
+
+  prev_tag_size = input_file.ui32
+  
+  if input_file.eof?
+    puts "LASTTAG:"
+    puts "  Prev tag size: #{prev_tag_size}"
+
+    more_to_read = false
+    next
+  end
+
+  puts "TAG: (offset #{input_file.pos})"
+  puts "  Prev tag size: #{prev_tag_size}"
+  
+  kind = input_file.ui8
+  size = input_file.ui24
+  timestamp = input_file.ui24
+  timestamp_ext = input_file.ui8
+  stream_id = input_file.ui24
+  
+  kind_name = tag_kinds[kind] || 'unknown'
+  
+  puts "  Type: #{kind} (#{kind_name})"
+  puts "  Size: #{size}"
+  puts "  Time: #{timestamp_ext*(2**24) + timestamp / 1000.0}"
+  puts "  Stream ID: #{stream_id}"
+
+  next if size == 0
+
+  if kind_name == 'audio'
+    format_flags = input_file.ui8
+    format = (format_flags >> 4) & 15
+    rate = (2 ** ((format_flags >> 2) & 3) * 5512.5).round
+    bits = ((format_flags >> 1) & 1) * 8 + 8
+    channels = format_flags & 1 + 1
+    puts "  Audio format: #{format} (#{audio_formats[format] || 'unknown'})"
+    puts "  Audio rate: #{rate}"
+    puts "  Audio bits: #{bits}"
+    puts "  Audio channels: #{channels}"
+    
+    if format == 10
+      packet_type = input_file.ui8
+      puts "  Audio packet type: #{packet_type} (#{packet_type == 0 ? 'sequence header' : 'raw'})"
+      audio_specific_config = input_file.read(size - 2)
+      if packet_type == 0
+        if audio_specific_config.length >= 2
+          asc = Bitstream.new(audio_specific_config)
+          audio_object_type = asc.getbits(5)
+          if audio_object_type == 31
+            audio_object_type = asc.getbits(6) + 32 # Extended object type
+          end
+          puts "    Audio Object Type: #{audio_object_type} - #{mpeg4_audio_object_types[audio_object_type]}"
+
+          frequency_index = asc.getbits(4)
+          if frequency_index == 15
+            frequency = asc.getbits(24) # Extended frequency
+          else
+            frequency = mpeg4_audio_frequencies[frequency_index]
+          end
+          puts "    Sampling Frequency: #{frequency}"
+          
+          channel_config = asc.getbits(4)
+          puts "    Channel Config: #{mpeg4_channel_configurations[channel_config]}"
+
+        else
+          puts "    ERROR: AudioSpecificConfig too small! Assuming stream info is accurate."
+        end
+      end
+    else
+      input_file.read(size - 1)
+    end
+    
+
+  elsif kind_name == 'video'
+    format_flags = input_file.ui8
+    frame_type = (format_flags >> 4) & 15
+    codec_id = format_flags & 0xf
+    
+    puts "  Video frame type: #{frame_type} (#{video_frame_types[frame_type] || 'unknown'})"
+    puts "  Video codec: #{codec_id} (#{video_codecs[codec_id] || 'unknown'})"
+    
+    if codec_id == 4 #&& frame_type == 1 # vp6 keyframe
+      stream_bytes = input_file.read(9)
+
+      vp6_frame_mode = (stream_bytes[1] >> 7) & 1
+      vp6_q_param = (stream_bytes[1] >> 1) & 0b00111111
+      vp6_marker = stream_bytes[1] & 1
+      
+      puts "  VP6 Frame Mode: #{vp6_frame_mode}"
+      puts "  VP6 Q Param: #{vp6_q_param}"
+      puts "  VP6 Marker: #{vp6_marker} (#{vp6_marker == 1 ? 'VP60' : 'VP61/VP62'})"
+
+      offset = 2
+      # if frame_mode==0, there's an extra byte of data.
+      if vp6_frame_mode == 0
+        vp6_version = (stream_bytes[2] >> 3) & 0b00011111
+        vp6_version2 = (stream_bytes[2] >> 1) & 3
+        vp6_interlaced = stream_bytes[2] & 1
+        
+        puts "  VP6 Version: #{vp6_version}"
+        puts "  VP6 Version2: #{vp6_version2}"
+        puts "  VP6 Interlaced: #{vp6_interlaced}"
+
+        offset += 1
+
+        # if marker==1 or version2==0, there are 2 more extra data bytes
+        if vp6_marker == 1 || vp6_version2 == 0
+          vp6_secondary_buffer_offset = stream_bytes[offset] << 8 + stream_bytes[offset + 1]
+          puts "  VP6 Secondary Buffer Offset: #{vp6_secondary_buffer_offset}"
+
+          offset += 2
+        end
+
+        # Now offset points to the resolution values: [h_mb,w_mb,h_disp,w_disp]
+        disp_width = stream_bytes[offset+3] * 16
+        h_adjust = (stream_bytes[0] >> 4) & 15
+        disp_height = stream_bytes[offset+2] * 16
+        v_adjust = stream_bytes[0] & 0x0f
+
+        width = disp_width - h_adjust
+        height = disp_height - v_adjust
+
+        puts "  Video width: #{width} (#{disp_width} - #{h_adjust})"
+        puts "  Video height: #{height} (#{disp_height} - #{v_adjust})"
+      else
+        if vp6_marker == 1
+          vp6_secondary_buffer_offset = stream_bytes[offset] << 8 + stream_bytes[offset + 1]
+          puts "  VP6 Secondary Buffer Offset: #{vp6_secondary_buffer_offset}"
+        end
+      end
+      
+      
+      input_file.read(size - 10)
+
+    elsif codec_id == 5 && frame_type == 1 # vp6a keyframe
+      stream_bytes = input_file.read(9)
+
+      disp_width = stream_bytes[7] * 16
+      h_adjust = (stream_bytes[0] >> 4) & 15
+      disp_height = stream_bytes[6] * 16
+      v_adjust = stream_bytes[0] & 0x0f
+
+      width = disp_width - h_adjust
+      height = disp_height - v_adjust
+
+      puts "  Video width: #{width} (#{disp_width} - #{h_adjust})"
+      puts "  Video height: #{height} (#{disp_height} - #{v_adjust})"
+
+      input_file.read(size - 10)
+
+    elsif codec_id == 7 # AVC frame
+      packet_type = input_file.ui8
+      bytes_read = 2
+
+      puts "  Packet Type: %s" % ({0 => 'AVC Sequency Header', 1 => 'AVC NALU', 2 => 'AVC end of sequence'}[packet_type] || 'unknown')
+      if packet_type == 1 && size >= 5
+        composition_time = input_file.si24
+        bytes_read += 3
+        puts "  Composition Time Offset: %0.3f" % (composition_time / 1000.0)
+      end
+
+      input_file.read(size - bytes_read)
+    else
+
+      input_file.read(size - 1)
+    end
+
+  elsif kind_name == 'script'
+    input_file.ui8 # 1 byte of junk?
+    tag_pos = 1
+
+    name_len = input_file.ui16
+    puts "  Script object name length: #{name_len}"
+    tag_pos += 2
+
+    name = input_file.read(name_len)
+    tag_pos += name_len
+
+    puts "  Script object name: #{name}"
+    
+    data_type = input_file.ui8
+    tag_pos += 1
+    puts "  Script object type: #{data_type}"
+    
+    input_file.read(size - tag_pos)
+  else
+    input_file.read(size)
+  end
+  
+end
+
+
+puts
+close(input_file) rescue nil
