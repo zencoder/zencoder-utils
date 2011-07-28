@@ -1,12 +1,14 @@
 #/usr/bin/env ruby
 
+TIME_OFFSET = -5.hours
 CLOUD_ID = 1
-# START_TIME = Time.gm(2011,07,20,0,0,0)
-DURATION = 24.hours
-START_TIME = Time.now - DURATION
 EXCLUDE_LOW_PRIORITY = true
-# DATA_POINTS = 6.hours / 15.seconds
+
+DURATION = 6.hours
+START_TIME = Time.now - DURATION
+# START_TIME = Time.gm(2011,07,20,0,0,0)
 DATA_POINTS = 1440
+# DATA_POINTS = 6.hours / 15.seconds
 
 #####################################################################
 
@@ -28,14 +30,17 @@ DATA_POINTS = 1440
   # For now we ignore all debugging/stopped/etc workers.
   next unless worker.killed_at || ['launching','active','terminating','updating','disappeared'].include?(worker.state)
 
+  input_capacity = @worker_types[worker.worker_type_id].max_downloads || 6
+  output_capacity = @worker_types[worker.worker_type_id].max_load || 900
+
   if worker.url.blank? && ['terminated','disappeared'].include?(worker.state)
-    @worker_time_data << { :type => :bad_launch, :time => worker.created_at.to_i }
-    @worker_time_data << { :type => :bad_kill, :time => worker.updated_at.to_i }
+    @worker_time_data << { :type => :bad_launch, :time => worker.created_at.to_i, :input_capacity => input_capacity, :output_capacity => output_capacity }
+    @worker_time_data << { :type => :bad_kill, :time => worker.updated_at.to_i, :input_capacity => input_capacity, :output_capacity => output_capacity }
   elsif worker.url.present? || ['launching'].include?(worker.state)
     # Good worker.
-    @worker_time_data << { :type => :launched, :time => worker.created_at.to_i }
-    @worker_time_data << { :type => :active, :time => (worker.alive_at || Time.now + 1.year).to_i }
-    @worker_time_data << { :type => :killed, :time => (worker.killed_at || Time.now + 1.year).to_i }
+    @worker_time_data << { :type => :launched, :time => worker.created_at.to_i, :input_capacity => input_capacity, :output_capacity => output_capacity }
+    @worker_time_data << { :type => :active, :time => (worker.alive_at || Time.now + 1.year).to_i, :input_capacity => input_capacity, :output_capacity => output_capacity }
+    @worker_time_data << { :type => :killed, :time => (worker.killed_at || Time.now + 1.year).to_i, :input_capacity => input_capacity, :output_capacity => output_capacity }
   else
     puts "Ignoring bad worker record - #{worker.id}"
   end
@@ -106,15 +111,16 @@ END_HTML
   f.puts "var data = new google.visualization.DataTable();"
   f.puts "data.addColumn('string','Time')"
 
-  f.puts "data.addColumn('number','Launched Workers')"
+  # f.puts "data.addColumn('number','Launched Workers')"
   f.puts "data.addColumn('number','Active Workers')"
-  f.puts "data.addColumn('number','Bad Workers')"
+  # f.puts "data.addColumn('number','Bad Workers')"
   # f.puts "data.addColumn('number','Queued Inputs')"
   f.puts "data.addColumn('number','Processing Inputs')"
   # f.puts "data.addColumn('number','Queued Outputs')"
   # f.puts "data.addColumn('number','Queued Output Load')"
   f.puts "data.addColumn('number','Processing Outputs')"
   f.puts "data.addColumn('number','Processing Output Load')"
+  f.puts "data.addColumn('number','Active Worker Output Capacity')"
 
   f.puts "data.addRows(["
 
@@ -122,6 +128,12 @@ END_HTML
     :launched_workers => [0],
     :active_workers => [0],
     :bad_workers => [0],
+    :launched_worker_input_capacity => [0],
+    :active_worker_input_capacity => [0],
+    :bad_worker_input_capacity => [0],
+    :launched_worker_output_capacity => [0],
+    :active_worker_output_capacity => [0],
+    :bad_worker_output_capacity => [0],
     :queued_inputs => [0],
     :processing_inputs => [0],
     :queued_outputs => [0],
@@ -133,6 +145,12 @@ END_HTML
     :launched_workers => 0,
     :active_workers => 0,
     :bad_workers => 0,
+    :launched_worker_input_capacity => 0,
+    :active_worker_input_capacity => 0,
+    :bad_worker_input_capacity => 0,
+    :launched_worker_output_capacity => 0,
+    :active_worker_output_capacity => 0,
+    :bad_worker_output_capacity => 0,
     :queued_inputs => 0,
     :processing_inputs => 0,
     :queued_outputs => 0,
@@ -153,13 +171,21 @@ END_HTML
       case data_type
       when :launched
         @baselines[:launched_workers] += 1
+        @baselines[:launched_worker_input_capacity] += data[:input_capacity]
+        @baselines[:launched_worker_output_capacity] += data[:output_capacity]
       when :active
         @baselines[:active_workers] += 1
+        @baselines[:active_worker_input_capacity] += data[:input_capacity]
+        @baselines[:active_worker_output_capacity] += data[:output_capacity]
       when :bad_launch
         @baselines[:bad_workers] += 1
+        @baselines[:bad_worker_input_capacity] += data[:input_capacity]
+        @baselines[:bad_worker_output_capacity] += data[:output_capacity]
       when :bad_kill
         # Sometimes the sql query will include old bad workers.  Account for them.
         @baselines[:bad_workers] -= 1
+        @baselines[:bad_worker_input_capacity] -= data[:input_capacity]
+        @baselines[:bad_worker_output_capacity] -= data[:output_capacity]
       end
 
       next
@@ -169,7 +195,9 @@ END_HTML
     point_loc = (offset / @granularity).round
     
     while prev_point < point_loc
-      [:launched_workers, :active_workers, :bad_workers].each do |data_set|
+      [:launched_workers, :launched_worker_input_capacity, :launched_worker_output_capacity,
+       :active_workers, :active_worker_input_capacity, :active_worker_output_capacity,
+       :bad_workers, :bad_worker_input_capacity, :bad_worker_output_capacity].each do |data_set|
         @data_points[data_set][prev_point + 1] = @data_points[data_set][prev_point]
       end
       prev_point += 1
@@ -178,15 +206,27 @@ END_HTML
     case data_type
     when :launched
       @data_points[:launched_workers][point_loc] += 1
+      @data_points[:launched_worker_input_capacity][point_loc] += data[:input_capacity]
+      @data_points[:launched_worker_output_capacity][point_loc] += data[:output_capacity]
     when :active
       @data_points[:active_workers][point_loc] += 1
+      @data_points[:active_worker_input_capacity][point_loc] += data[:input_capacity]
+      @data_points[:active_worker_output_capacity][point_loc] += data[:output_capacity]
     when :killed
       @data_points[:launched_workers][point_loc] -= 1
+      @data_points[:launched_worker_input_capacity][point_loc] -= data[:input_capacity]
+      @data_points[:launched_worker_output_capacity][point_loc] -= data[:output_capacity]
       @data_points[:active_workers][point_loc] -= 1
+      @data_points[:active_worker_input_capacity][point_loc] -= data[:input_capacity]
+      @data_points[:active_worker_output_capacity][point_loc] -= data[:output_capacity]
     when :bad_launch
       @data_points[:bad_workers][point_loc] += 1
+      @data_points[:bad_worker_input_capacity][point_loc] += data[:input_capacity]
+      @data_points[:bad_worker_output_capacity][point_loc] += data[:output_capacity]
     when :bad_kill
       @data_points[:bad_workers][point_loc] -= 1
+      @data_points[:bad_worker_input_capacity][point_loc] -= data[:input_capacity]
+      @data_points[:bad_worker_output_capacity][point_loc] -= data[:output_capacity]
     end
   end
 
@@ -273,29 +313,38 @@ END_HTML
   end
 
   ############# SCALE DOWN OUTPUT LOAD ###########
-  max_outputs = @data_points[:queued_outputs].max
-  max_load = @data_points[:queued_output_load].max
-  scale = max_outputs.to_f / max_load
+  max_outputs = @data_points[:queued_outputs].max + @baselines[:queued_outputs]
+  max_load = @data_points[:queued_output_load].max + @baselines[:queued_output_load]
+  max_capacity = @data_points[:launched_worker_output_capacity].max + @baselines[:launched_worker_output_capacity]
+  scale = max_outputs.to_f / max_capacity
   @baselines[:queued_output_load] = (@baselines[:queued_output_load] * scale).round
   @data_points[:queued_output_load].each_with_index do |value,index|
     @data_points[:queued_output_load][index] = (value * scale).round
   end
-  
+  @baselines[:launched_worker_output_capacity] = (@baselines[:launched_worker_output_capacity] * scale).round
+  @data_points[:launched_worker_output_capacity].each_with_index do |value,index|
+    @data_points[:launched_worker_output_capacity][index] = (value * scale).round
+  end
 
-  max_outputs = @data_points[:processing_outputs].max
-  max_load = @data_points[:processing_output_load].max
-  scale = max_outputs.to_f / max_load
+  max_outputs = @data_points[:processing_outputs].max + @baselines[:processing_outputs]
+  max_load = @data_points[:processing_output_load].max + @baselines[:processing_output_load]
+  max_capacity = @data_points[:active_worker_output_capacity].max + @baselines[:active_worker_output_capacity]
+  scale = max_outputs.to_f / max_capacity
   @baselines[:processing_output_load] = (@baselines[:processing_output_load] * scale).round
   @data_points[:processing_output_load].each_with_index do |value,index|
     @data_points[:processing_output_load][index] = (value * scale).round
   end
+  @baselines[:active_worker_output_capacity] = (@baselines[:active_worker_output_capacity] * scale).round
+  @data_points[:active_worker_output_capacity].each_with_index do |value,index|
+    @data_points[:active_worker_output_capacity][index] = (value * scale).round
+  end
 
-  zone = -5.hours
   DATA_POINTS.times do |p|
-    time = (@start_time + (p*@granularity) + zone).strftime('%H:%M')
+    time = (@start_time + (p*@granularity) + TIME_OFFSET).strftime('%H:%M')
     values = []
     # [:launched_workers, :active_workers, :bad_workers, :queued_inputs, :processing_inputs, :queued_outputs, :queued_output_load, :processing_outputs, :processing_output_load].each do |data_set|
-    [:launched_workers, :active_workers, :bad_workers, :processing_inputs, :processing_outputs, :processing_output_load].each do |data_set|
+    # [:launched_workers, :active_workers, :bad_workers, :processing_inputs, :processing_outputs, :processing_output_load, :active_worker_output_capacity].each do |data_set|
+    [:active_workers, :processing_inputs, :processing_outputs, :processing_output_load, :active_worker_output_capacity].each do |data_set|
       values << @baselines[data_set] + @data_points[data_set][p].to_i
     end
     f.puts "  ['%s', %s]," % [time, values.join(',')]
