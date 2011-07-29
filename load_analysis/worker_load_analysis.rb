@@ -4,33 +4,34 @@ TIME_OFFSET = -5.hours
 CLOUD_ID = 1
 EXCLUDE_LOW_PRIORITY = true
 
-DURATION = 6.hours
+DURATION = 24.hours
 START_TIME = Time.now - DURATION
 # START_TIME = Time.gm(2011,07,20,0,0,0)
 DATA_POINTS = 1440
 # DATA_POINTS = 6.hours / 15.seconds
 
-SETS_TO_SHOW = [:launched_workers, :active_workers, :bad_workers, :launched_worker_input_capacity, :active_worker_input_capacity, :bad_worker_input_capacity, :launched_worker_output_capacity, :active_worker_output_capacity, :bad_worker_output_capacity, :queued_inputs, :processing_inputs, :queued_outputs, :queued_output_load, :processing_outputs, :processing_output_load]
+# SETS_TO_SHOW = [:launched_workers, :active_workers, :bad_workers, :launched_worker_input_capacity, :active_worker_input_capacity, :bad_worker_input_capacity, :launched_worker_output_capacity, :active_worker_output_capacity, :bad_worker_output_capacity, :queued_inputs, :processing_inputs, :queued_outputs, :queued_output_load, :processing_outputs, :processing_output_load]
 # SETS_TO_SHOW = [:launched_workers, :active_workers, :queued_inputs, :processing_inputs, :queued_output_load, :processing_output_load, :active_worker_output_capacity]
+SETS_TO_SHOW = [:launched_workers, :active_worker_output_capacity, :queued_output_load, :processing_output_load]
 
 #####################################################################
 
 @sets_config = {
-  :launched_workers                => { :color => '#333399', :desc => 'Launched Workers' },
+  :launched_workers                => { :color => '#ccaa00', :desc => 'Launched Workers' },
   :active_workers                  => { :color => '#9999ff', :desc => 'Active Workers' },
   :bad_workers                     => { :color => '#663399', :desc => 'Bad Workers' },
   :launched_worker_input_capacity  => { :color => '#339933', :desc => 'Launched Worker Input Capacity' },
   :active_worker_input_capacity    => { :color => '#99ff66', :desc => 'Active Worker Input Capacity' },
   :bad_worker_input_capacity       => { :color => '#669900', :desc => 'Bad Worker Input Capacity' },
   :launched_worker_output_capacity => { :color => '#339999', :desc => 'Launched Worker Output Capacity' },
-  :active_worker_output_capacity   => { :color => '#99ffff', :desc => 'Active Worker Output Capacity' },
+  :active_worker_output_capacity   => { :color => '#33ff33', :desc => 'Active Worker Output Capacity' },
   :bad_worker_output_capacity      => { :color => '#66ffff', :desc => 'Bad Worker Output Capacity' },
   :queued_inputs                   => { :color => '#993333', :desc => 'Queued Inputs' },
   :processing_inputs               => { :color => '#ff6699', :desc => 'Processing Inputs' },
   :queued_outputs                  => { :color => '#339966', :desc => 'Queued Outputs' },
-  :queued_output_load              => { :color => '#669966', :desc => 'Queued Output Load' },
+  :queued_output_load              => { :color => '#6600cc', :desc => 'Queued Output Load' },
   :processing_outputs              => { :color => '#99ffcc', :desc => 'Processing Outputs' },
-  :processing_output_load          => { :color => '#ccffcc', :desc => 'Processing Output Load' },
+  :processing_output_load          => { :color => '#cc0066', :desc => 'Processing Output Load' },
 }
 
 
