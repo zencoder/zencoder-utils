@@ -10,7 +10,29 @@ START_TIME = Time.now - DURATION
 DATA_POINTS = 1440
 # DATA_POINTS = 6.hours / 15.seconds
 
+SETS_TO_SHOW = [:launched_workers, :active_workers, :bad_workers, :launched_worker_input_capacity, :active_worker_input_capacity, :bad_worker_input_capacity, :launched_worker_output_capacity, :active_worker_output_capacity, :bad_worker_output_capacity, :queued_inputs, :processing_inputs, :queued_outputs, :queued_output_load, :processing_outputs, :processing_output_load]
+# SETS_TO_SHOW = [:launched_workers, :active_workers, :queued_inputs, :processing_inputs, :queued_output_load, :processing_output_load, :active_worker_output_capacity]
+
 #####################################################################
+
+@sets_config = {
+  :launched_workers                => { :color => '#333399', :desc => 'Launched Workers' },
+  :active_workers                  => { :color => '#9999ff', :desc => 'Active Workers' },
+  :bad_workers                     => { :color => '#663399', :desc => 'Bad Workers' },
+  :launched_worker_input_capacity  => { :color => '#339933', :desc => 'Launched Worker Input Capacity' },
+  :active_worker_input_capacity    => { :color => '#99ff66', :desc => 'Active Worker Input Capacity' },
+  :bad_worker_input_capacity       => { :color => '#669900', :desc => 'Bad Worker Input Capacity' },
+  :launched_worker_output_capacity => { :color => '#339999', :desc => 'Launched Worker Output Capacity' },
+  :active_worker_output_capacity   => { :color => '#99ffff', :desc => 'Active Worker Output Capacity' },
+  :bad_worker_output_capacity      => { :color => '#66ffff', :desc => 'Bad Worker Output Capacity' },
+  :queued_inputs                   => { :color => '#993333', :desc => 'Queued Inputs' },
+  :processing_inputs               => { :color => '#ff6699', :desc => 'Processing Inputs' },
+  :queued_outputs                  => { :color => '#339966', :desc => 'Queued Outputs' },
+  :queued_output_load              => { :color => '#669966', :desc => 'Queued Output Load' },
+  :processing_outputs              => { :color => '#99ffcc', :desc => 'Processing Outputs' },
+  :processing_output_load          => { :color => '#ccffcc', :desc => 'Processing Output Load' },
+}
+
 
 @start_time = START_TIME
 @end_time = START_TIME + DURATION
@@ -111,53 +133,20 @@ END_HTML
   f.puts "var data = new google.visualization.DataTable();"
   f.puts "data.addColumn('string','Time')"
 
-  # f.puts "data.addColumn('number','Launched Workers')"
-  f.puts "data.addColumn('number','Active Workers')"
-  # f.puts "data.addColumn('number','Bad Workers')"
-  # f.puts "data.addColumn('number','Queued Inputs')"
-  f.puts "data.addColumn('number','Processing Inputs')"
-  # f.puts "data.addColumn('number','Queued Outputs')"
-  # f.puts "data.addColumn('number','Queued Output Load')"
-  f.puts "data.addColumn('number','Processing Outputs')"
-  f.puts "data.addColumn('number','Processing Output Load')"
-  f.puts "data.addColumn('number','Active Worker Output Capacity')"
+  SETS_TO_SHOW.each do |data_set|
+    f.puts "data.addColumn('number','#{@sets_config[data_set][:desc]}')"
+  end
 
   f.puts "data.addRows(["
 
-  @data_points = {
-    :launched_workers => [0],
-    :active_workers => [0],
-    :bad_workers => [0],
-    :launched_worker_input_capacity => [0],
-    :active_worker_input_capacity => [0],
-    :bad_worker_input_capacity => [0],
-    :launched_worker_output_capacity => [0],
-    :active_worker_output_capacity => [0],
-    :bad_worker_output_capacity => [0],
-    :queued_inputs => [0],
-    :processing_inputs => [0],
-    :queued_outputs => [0],
-    :queued_output_load => [0],
-    :processing_outputs => [0],
-    :processing_output_load => [0],
-  }
-  @baselines = {
-    :launched_workers => 0,
-    :active_workers => 0,
-    :bad_workers => 0,
-    :launched_worker_input_capacity => 0,
-    :active_worker_input_capacity => 0,
-    :bad_worker_input_capacity => 0,
-    :launched_worker_output_capacity => 0,
-    :active_worker_output_capacity => 0,
-    :bad_worker_output_capacity => 0,
-    :queued_inputs => 0,
-    :processing_inputs => 0,
-    :queued_outputs => 0,
-    :queued_output_load => 0,
-    :processing_outputs => 0,
-    :processing_output_load => 0,
-  }
+
+  # Initialize all set data points to an array with an intitial zero.
+  @data_points = { }
+  @sets_config.keys.each { |k| @data_points[k] = [0] }
+
+  # Initialize all baselines to zero.
+  @baselines = { }
+  @sets_config.keys.each { |k| @baselines[k] = 0 }
   
   @granularity = (@end_time - @start_time) / DATA_POINTS.to_f
 
@@ -313,50 +302,44 @@ END_HTML
   end
 
   ############# SCALE DOWN OUTPUT LOAD ###########
-  max_outputs = @data_points[:queued_outputs].max + @baselines[:queued_outputs]
-  max_load = @data_points[:queued_output_load].max + @baselines[:queued_output_load]
-  max_capacity = @data_points[:launched_worker_output_capacity].max + @baselines[:launched_worker_output_capacity]
+  max_outputs = [
+    @data_points[:queued_outputs].max + @baselines[:queued_outputs],
+    @data_points[:processing_outputs].max + @baselines[:processing_outputs],
+  ].max
+  max_capacity = [
+    @data_points[:launched_worker_output_capacity].max + @baselines[:launched_worker_output_capacity],
+    @data_points[:active_worker_output_capacity].max + @baselines[:active_worker_output_capacity],
+    @data_points[:bad_worker_output_capacity].max + @baselines[:bad_worker_output_capacity],
+  ].max
   scale = max_outputs.to_f / max_capacity
-  @baselines[:queued_output_load] = (@baselines[:queued_output_load] * scale).round
-  @data_points[:queued_output_load].each_with_index do |value,index|
-    @data_points[:queued_output_load][index] = (value * scale).round
-  end
-  @baselines[:launched_worker_output_capacity] = (@baselines[:launched_worker_output_capacity] * scale).round
-  @data_points[:launched_worker_output_capacity].each_with_index do |value,index|
-    @data_points[:launched_worker_output_capacity][index] = (value * scale).round
-  end
-
-  max_outputs = @data_points[:processing_outputs].max + @baselines[:processing_outputs]
-  max_load = @data_points[:processing_output_load].max + @baselines[:processing_output_load]
-  max_capacity = @data_points[:active_worker_output_capacity].max + @baselines[:active_worker_output_capacity]
-  scale = max_outputs.to_f / max_capacity
-  @baselines[:processing_output_load] = (@baselines[:processing_output_load] * scale).round
-  @data_points[:processing_output_load].each_with_index do |value,index|
-    @data_points[:processing_output_load][index] = (value * scale).round
-  end
-  @baselines[:active_worker_output_capacity] = (@baselines[:active_worker_output_capacity] * scale).round
-  @data_points[:active_worker_output_capacity].each_with_index do |value,index|
-    @data_points[:active_worker_output_capacity][index] = (value * scale).round
+  
+  [:queued_output_load, :launched_worker_output_capacity, :processing_output_load, :active_worker_output_capacity, :bad_worker_output_capacity].each do |data_set|
+    @baselines[data_set] = (@baselines[data_set] * scale).round
+    @data_points[data_set].each_with_index do |value,index|
+      @data_points[data_set][index] = (value * scale).round
+    end
   end
 
   DATA_POINTS.times do |p|
     time = (@start_time + (p*@granularity) + TIME_OFFSET).strftime('%H:%M')
     values = []
-    # [:launched_workers, :active_workers, :bad_workers, :queued_inputs, :processing_inputs, :queued_outputs, :queued_output_load, :processing_outputs, :processing_output_load].each do |data_set|
-    # [:launched_workers, :active_workers, :bad_workers, :processing_inputs, :processing_outputs, :processing_output_load, :active_worker_output_capacity].each do |data_set|
-    [:active_workers, :processing_inputs, :processing_outputs, :processing_output_load, :active_worker_output_capacity].each do |data_set|
+    SETS_TO_SHOW.each do |data_set|
       values << @baselines[data_set] + @data_points[data_set][p].to_i
     end
     f.puts "  ['%s', %s]," % [time, values.join(',')]
   end
   
   f.puts "]);"
-  f.puts "var chart = new google.visualization.AreaChart(document.getElementById('chart_div'));"
+  f.puts "var chart = new google.visualization.LineChart(document.getElementById('chart_div'));"
 
   invert_colors = true
   inverted_color_spec = ", backgroundColor: 'black', gridlineColor: '#444', legendTextStyle: { color: '#ccc' }, hAxis: { baselineColor: '#999', textStyle: { color: '#ccc' }, titleTextStyle: { color: '#ccc' } }, vAxis: { baselineColor: '#999', titleTextStyle: { color: '#ccc' }, textStyle: { color: '#ccc' } }"
+  
+  line_colors = "series: ["
+  line_colors << SETS_TO_SHOW.map { |data_set| "{color: '#{@sets_config[data_set][:color]}'}" }.join(',')
+  line_colors << "]"
 
-  f.puts "chart.draw(data, { isStacked: false, lineWidth: 1, width: 1440, height: 800 #{inverted_color_spec if invert_colors} });"
+  f.puts "chart.draw(data, { isStacked: false, lineWidth: 1, width: 1440, height: 800, #{line_colors} #{inverted_color_spec if invert_colors} });"
   f.puts "</script>"
 
 f.puts <<END_HTML
