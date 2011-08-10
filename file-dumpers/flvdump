@@ -216,7 +216,7 @@ flags = input_file.ui8
 puts "Has audio tags: " + ((flags & 0x4 > 0) ? 'yes' : 'no')
 puts "Has video tags: " + ((flags & 0x1 > 0) ? 'yes' : 'no')
 if (flags & 0b11111010) > 0
-  puts "WARNING: reserved flag bytes are not zero!"
+  puts "WARNING: reserved flag bits are not zero!"
 end
 
 data_loc = input_file.ui32
