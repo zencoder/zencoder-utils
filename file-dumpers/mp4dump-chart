@@ -25,6 +25,31 @@ class BoxFile
     self
   end
 
+  def tracks
+    @tracks ||= moov.children('trak') rescue []
+  end
+
+  def video_tracks
+    tracks.select { |t| t.first_descendant('vmhd') }
+  end
+
+  def audio_tracks
+    tracks.select { |t| t.first_descendant('smhd') }
+  end
+
+  def moov
+    return @moov if @moov
+    @moov = @boxes.detect { |b| b.kind == 'moov' }
+
+    # Check for compressed version.
+    cmov = @moov.first_child('cmov')
+    if cmov && cmov.first_descendant('moov')
+      @moov = cmov.first_descendant('moov')
+    end
+
+    @moov
+  end
+
   def print_tree
     puts
     @boxes.each { |box| box.print_tree }
@@ -113,6 +138,24 @@ class Box
 
   def first_child(child_kind)
     @children.detect { |c| c.kind == child_kind }
+  end
+  def children(child_kind = nil)
+    return @children if child_kind.nil?
+    @children.select { |c| c.kind == child_kind }
+  end
+
+  def first_descendant(child_kind)
+    d = first_child(child_kind)
+    return d if d
+    @children.each do |c|
+      d = c.first_descendant(child_kind)
+      return d if d
+    end
+    nil
+  end
+
+  def descendants(child_kind)
+    (children(child_kind) + @children.map { |c| c.descendants(child_kind) }).flatten
   end
 end
 
@@ -1118,8 +1161,9 @@ end
 
 $VERBOSE = false
 $DEBUG = false
+WINDOW_SIZE = 2.0
 
-error "Please specify a file to inspect." unless ARGV.length > 0
+error "Please specify a file to chart." unless ARGV.length > 0
 
 if ARGV.first == '-v'
   $VERBOSE = true
@@ -1135,4 +1179,44 @@ input_file = File.open(input_filename)
 file = BoxFile.new(input_file)
 file.parse
 
-file.print_tree
+video_track = file.video_tracks.first
+error "No video track found!" unless video_track
+
+
+timescale = video_track.first_descendant('mdhd').timescale
+stts = video_track.first_descendant('stts')
+stsz = video_track.first_descendant('stsz')
+
+sample_number = 0
+current_time = 0
+total_size = 0
+recent_frame_sizes = []
+
+stts.entries.each do |stts_entry|
+  stts_entry[:count].times do
+    time = current_time.to_f / timescale
+    size = stsz.entries[sample_number]
+    
+    recent_frame_sizes << size
+    if time >= WINDOW_SIZE
+      avg = (recent_frame_sizes.inject(0) { |s,v| s + v }) / recent_frame_sizes.length.to_f
+      recent_frame_sizes.shift
+    end
+    
+    if avg
+      puts "#{sprintf('%0.3f', time)} - #{sprintf('%6d',size)} - #{sprintf('%0.3f',avg)}"
+    else
+      puts "#{sprintf('%0.3f', time)} - #{sprintf('%6d',size)} - N/A"
+    end
+
+    total_size += size
+    current_time += stts_entry[:duration]
+    sample_number += 1
+  end
+end
+
+total_duration = current_time.to_f / timescale
+
+puts "Average Bitrate: #{(total_size.to_f / total_duration) * 0.008} Kbps"
+
+
