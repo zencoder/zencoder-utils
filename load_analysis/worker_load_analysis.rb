@@ -1,10 +1,10 @@
 #/usr/bin/env ruby
 
-TIME_OFFSET = -5.hours
+TIME_OFFSET = -7.hours
 CLOUD_ID = 1
 EXCLUDE_LOW_PRIORITY = true
 
-DURATION = 12.hours
+DURATION = 24.hours
 START_TIME = Time.now - DURATION
 # START_TIME = Time.gm(2011,8,8,21,57,0)
 # START_TIME = Time.gm(2011,8,9,8,4,0)
@@ -15,28 +15,34 @@ all_data_sets = [:launched_workers, :active_workers, :bad_workers, :launched_wor
 output_scaling_data_sets = [:launched_workers, :active_workers, :launched_worker_output_capacity, :output_autoscale_threshold, :active_worker_output_capacity, :queued_output_load, :processing_output_load]
 input_scaling_data_sets = [:launched_workers, :active_workers, :launched_worker_input_capacity, :input_autoscale_threshold, :active_worker_input_capacity, :queued_inputs, :processing_inputs]
 
-SETS_TO_SHOW = output_scaling_data_sets
+scale_analysis_sets = [:launched_worker_input_capacity, :input_autoscale_threshold, :active_worker_input_capacity, :queued_inputs, :processing_inputs, :launched_worker_output_capacity, :output_autoscale_threshold, :active_worker_output_capacity, :queued_output_load, :processing_output_load]
+output_analysis_sets = [:launched_workers, :active_workers, :launched_worker_output_capacity, :output_autoscale_threshold, :active_worker_output_capacity, :queued_output_load, :processing_output_load]
+
+SETS_TO_SHOW = scale_analysis_sets
 
 #####################################################################
 
 @sets_config = {
   :launched_workers                => { :color => '#ccaa00', :capacity_scale => false, :desc => 'Launched Workers' },
   :active_workers                  => { :color => '#9999ff', :capacity_scale => false, :desc => 'Active Workers' },
+
   :bad_workers                     => { :color => '#663399', :capacity_scale => false, :desc => 'Bad Workers' },
-  :launched_worker_input_capacity  => { :color => '#339933', :capacity_scale => false, :desc => 'Launched Worker Input Capacity' },
-  :active_worker_input_capacity    => { :color => '#99ff66', :capacity_scale => false, :desc => 'Active Worker Input Capacity' },
   :bad_worker_input_capacity       => { :color => '#669900', :capacity_scale => false, :desc => 'Bad Worker Input Capacity' },
-  :launched_worker_output_capacity => { :color => '#339999', :capacity_scale => true,  :desc => 'Launched Worker Output Capacity' },
-  :active_worker_output_capacity   => { :color => '#33ff33', :capacity_scale => true,  :desc => 'Active Worker Output Capacity' },
   :bad_worker_output_capacity      => { :color => '#66ffff', :capacity_scale => true,  :desc => 'Bad Worker Output Capacity' },
+
+  :launched_worker_input_capacity  => { :color => '#aa6600', :capacity_scale => false, :desc => 'Launched Worker Input Capacity' },
+  :active_worker_input_capacity    => { :color => '#ffcc00', :capacity_scale => false, :desc => 'Active Worker Input Capacity' },
   :queued_inputs                   => { :color => '#993333', :capacity_scale => false, :desc => 'Queued Inputs' },
-  :processing_inputs               => { :color => '#ff6699', :capacity_scale => false, :desc => 'Processing Inputs' },
+  :processing_inputs               => { :color => '#cc9999', :capacity_scale => false, :desc => 'Processing Inputs' },
+  :input_autoscale_threshold       => { :color => '#cc0000', :capacity_scale => false, :desc => 'Input Autoscale Threshold' },
+
+  :launched_worker_output_capacity => { :color => '#0066aa', :capacity_scale => true,  :desc => 'Launched Worker Output Capacity' },
+  :active_worker_output_capacity   => { :color => '#00ccff', :capacity_scale => true,  :desc => 'Active Worker Output Capacity' },
   :queued_outputs                  => { :color => '#339966', :capacity_scale => false, :desc => 'Queued Outputs' },
-  :queued_output_load              => { :color => '#6600cc', :capacity_scale => true,  :desc => 'Queued Output Load' },
+  :queued_output_load              => { :color => '#33FF99', :capacity_scale => true,  :desc => 'Queued Output Load' },
   :processing_outputs              => { :color => '#99ffcc', :capacity_scale => false, :desc => 'Processing Outputs' },
-  :processing_output_load          => { :color => '#cc0066', :capacity_scale => true,  :desc => 'Processing Output Load' },
-  :input_autoscale_threshold       => { :color => '#77aa44', :capacity_scale => false, :desc => 'Input Autoscale Threshold' },
-  :output_autoscale_threshold      => { :color => '#338033', :capacity_scale => true,  :desc => 'Output Autoscale Threshold' },
+  :processing_output_load          => { :color => '#9999cc', :capacity_scale => true,  :desc => 'Processing Output Load' },
+  :output_autoscale_threshold      => { :color => '#6666cc', :capacity_scale => true,  :desc => 'Output Autoscale Threshold' },
 }
 
 
@@ -375,7 +381,7 @@ END_HTML
     end
     values = []
     SETS_TO_SHOW.each do |data_set|
-      values << @baselines[data_set] + @data_points[data_set][p].to_i
+      values << (@baselines[data_set].to_f + @data_points[data_set][p].to_f).round
     end
     f.puts "  ['%s', %s]," % [time, values.join(',')]
   end
@@ -401,7 +407,7 @@ END_HTML
   line_colors << "]"
   chart_specs << line_colors
 
-  f.puts "chart.draw(data, { #{chart_specs.join(',')} });"
+  f.puts "chart.draw(data, { #{chart_specs.join(', ')} });"
   f.puts "</script>"
 
 f.puts <<END_HTML
