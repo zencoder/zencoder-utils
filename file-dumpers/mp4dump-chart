@@ -1156,12 +1156,28 @@ end
 
 
 #################################################################################
+def escape_for_single_quotes(filename)
+  filename.gsub("'","'\\\\''")
+end
+
+def matrix_average(array)
+  sample_count = array.length
+
+  return [] if sample_count == 0
+
+  averages = []
+  array.first.length.times do |i|
+    averages << (array.inject(0) { |s,v| s + v[i].to_f }).to_f / sample_count
+  end
+
+  averages
+end
+
 
 # rainbow
 
 $VERBOSE = false
 $DEBUG = false
-WINDOW_SIZE = 2.0
 
 error "Please specify a file to chart." unless ARGV.length > 0
 
@@ -1175,6 +1191,12 @@ error "Input file not found." unless File.exist?(input_filename)
 
 file_size = File.size(input_filename)
 input_file = File.open(input_filename)
+mediainfo = `mediainfo '#{escape_for_single_quotes(input_filename)}' 2>/dev/null`
+
+vbv_maxrate = $1.to_i if mediainfo =~ / vbv_maxrate=(\d+) /
+vbv_bufsize = $1.to_i if mediainfo =~ / vbv_bufsize=(\d+) /
+target_bitrate = $1.to_i if mediainfo =~ / bitrate=(\d+) /
+vbv_duration = vbv_bufsize.to_f / vbv_maxrate if vbv_maxrate && vbv_bufsize
 
 file = BoxFile.new(input_file)
 file.parse
@@ -1190,33 +1212,208 @@ stsz = video_track.first_descendant('stsz')
 sample_number = 0
 current_time = 0
 total_size = 0
-recent_frame_sizes = []
+
+running_average_durations = [1.0, 2.0, 5]
+running_average_durations << vbv_duration if vbv_duration
+running_average_durations.sort!.uniq!
+
+running_averages = []
+data_points = []
+
+# Just make sure the accumulation array is initialized.
+running_average_durations.each do |d|
+  running_averages << []
+end
+
+POINT_INTERVAL = 0.5
+prev_data_point = 0
+
+frames_info = []
+prev_frame_duration = 0
+point_averages = []
 
 stts.entries.each do |stts_entry|
   stts_entry[:count].times do
     time = current_time.to_f / timescale
     size = stsz.entries[sample_number]
-    
-    recent_frame_sizes << size
-    if time >= WINDOW_SIZE
-      avg = (recent_frame_sizes.inject(0) { |s,v| s + v }) / recent_frame_sizes.length.to_f
-      recent_frame_sizes.shift
+    average_values = []
+    average_strings = []
+
+    frames_info << { :time => time, :size => size, :duration => stts_entry[:duration], :prev_duration => prev_frame_duration }
+
+    running_average_durations.each_with_index do |duration,index|
+      running_averages[index] << size
+
+      if time >= duration
+        avg = (running_averages[index].inject(0) { |s,v| s + v }) / running_averages[index].length.to_f
+        running_averages[index].shift
+        average_values << avg
+      else
+        average_values << nil
+      end
+
+      average_strings << "W=#{sprintf('%0.1f', duration)}: " + (avg ? sprintf('%0.3f', avg) : 'N/A')
     end
-    
-    if avg
-      puts "#{sprintf('%0.3f', time)} - #{sprintf('%6d',size)} - #{sprintf('%0.3f',avg)}"
-    else
-      puts "#{sprintf('%0.3f', time)} - #{sprintf('%6d',size)} - N/A"
+
+    puts "#{sprintf('%0.3f', time)} - #{sprintf('%6d',size)} - " + average_strings.join(' - ')
+
+    point_averages << average_values
+
+    if (time / POINT_INTERVAL).floor > prev_data_point
+      data_points << { :time => time, :values => matrix_average(point_averages) }
+      point_averages = []
+      prev_data_point = (time / POINT_INTERVAL).floor
     end
 
     total_size += size
     current_time += stts_entry[:duration]
     sample_number += 1
+    prev_frame_duration = stts_entry[:duration]
   end
 end
 
 total_duration = current_time.to_f / timescale
+total_fps = stsz.entries.length.to_f / total_duration
 
-puts "Average Bitrate: #{(total_size.to_f / total_duration) * 0.008} Kbps"
+if vbv_maxrate
+  bytes_per_second = vbv_maxrate * 1000 / 8
+  necessary_bitrates_by_time = []
+  bytes_so_far = 0
+
+  frames_info.reverse.each do |info|
+    seconds = info[:prev_duration].to_f / timescale
+    seconds = [0.0001, seconds].max
+
+    bytes_so_far += info[:size]
+    capacity = seconds * bytes_per_second
+
+    if capacity >= bytes_so_far
+      transferred = bytes_so_far
+      bytes_so_far = 0
+    else
+      transferred = capacity
+      bytes_so_far -= capacity
+    end
+
+    bitrate = (transferred / seconds) * 0.008
+    necessary_bitrates_by_time << { :time => info[:time], :bitrate => bitrate }
+  end
+
+  prev_data_point = 0
+  avg_sum = 0
+  avg_count = 0
+  necessary_bitrate_data_points = []
+  necessary_bitrates_by_time.sort_by { |nb| nb[:time] }.each do |nb|
+    puts "Bitrate needed at time #{sprintf('%0.1f', nb[:time])} => #{sprintf('%0.3f', nb[:bitrate])}"
+
+    time = nb[:time]
+    avg_sum += nb[:bitrate]
+    avg_count += 1
+    if (time / POINT_INTERVAL).floor > prev_data_point
+      necessary_bitrate_data_points << { :bitrate => nb[:bitrate], :avg => (avg_sum.to_f / avg_count) }
+      avg_sum = 0
+      avg_count = 0
+      prev_data_point = (time / POINT_INTERVAL).floor
+    end
+  end
+
+end
+
+
+
+average_bitrate = (total_size.to_f / total_duration) * 0.008
+puts "Average Bitrate: #{sprintf('%0.3f', average_bitrate)} Kbps"
+
+if vbv_duration
+  puts "VBV Maxrate: #{vbv_maxrate} Kbps"
+  puts "VBV Duration: #{sprintf('%0.3f', vbv_duration)}"
+end
+
+
+f = File.open('bitrate_analysis.html', 'w')
+f.puts <<END_HTML
+<html>
+  <head>
+    <script type="text/javascript" src="google_chart_code.js"></script>
+    <!--
+    <script type="text/javascript" src="https://www.google.com/jsapi"></script>
+    <script type="text/javascript">
+      google.load("visualization", "1", {packages:["corechart"]});
+    </script>
+    -->
+  </head>
+  <body>
+END_HTML
+
+  f.puts '<div id="chart_div"><iframe name="Drawing_Frame_1973" id="Drawing_Frame_1973" width="1000" height="600" frameborder="0" scrolling="no" marginheight="0" marginwidth="0"></iframe></div>'
+  f.puts "<script type=\"text/javascript\">"
+  f.puts "var data = new google.visualization.DataTable();"
+  f.puts "data.addColumn('string','Time')"
+  series_config = []
+
+  f.puts "data.addColumn('number','Average Bitrate')"
+  series_config << "{ color: '#ff0000' }"
+  if target_bitrate
+    f.puts "data.addColumn('number','Target Bitrate')"
+    series_config << "{ color: '#bb0000' }"
+  end
+  if vbv_maxrate
+    f.puts "data.addColumn('number','VBV Maxrate')"
+    series_config << "{ color: '#0000ff' }"
+  end
+  if necessary_bitrate_data_points
+    f.puts "data.addColumn('number','Data Rate')"
+    series_config << "{ color: '#ff99ff' }"
+  end
+
+  green_level = 255
+  running_average_durations.each do |duration|
+    if vbv_duration && vbv_duration == duration
+      name = "VBV (#{sprintf('%0.1f', duration)}s) Window"
+    else
+      name = "#{sprintf('%0.1f', duration)}s Window"
+    end
+    f.puts "data.addColumn('number','#{name}')"
+    series_config << "{ color: '#00#{sprintf('%02x', green_level)}00' }"
+    green_level = green_level * 3 / 4
+  end
+
+  f.puts "data.addRows(["
+  data_points.each_with_index do |info, index|
+    time = sprintf('%0.2f', info[:time])
+    values = ["'#{time}'"]
+    values << sprintf('%0.1f', average_bitrate)
+    values << target_bitrate if target_bitrate
+    values << vbv_maxrate if vbv_maxrate
+    values << necessary_bitrate_data_points[index][:avg] if necessary_bitrate_data_points
+
+    values += info[:values].map { |v| sprintf('%0.1f', v.to_f * total_fps * 0.008) }
+    f.puts "  [#{values.join(', ')}],"
+  end
+  f.puts "]);"
+
+  f.puts "var chart = new google.visualization.LineChart(document.getElementById('chart_div'));"
+  chart_specs = []
+  # Basics
+  chart_specs << "isStacked: false, lineWidth: 2, width: 1000, height: 600"
+  # Layout
+  chart_specs << "chartArea: { width: 800 }"
+
+  # Overall colors
+  chart_specs << "backgroundColor: 'white', gridlineColor: '#ddd', legendTextStyle: { color: '#333', fontSize: 10 }, hAxis: { baselineColor: 'black', textStyle: { color: '#333' }, titleTextStyle: { color: '#333' } }, vAxis: { baselineColor: 'black', titleTextStyle: { color: '#333' }, textStyle: { color: '#333' } }"
+
+  # Series colors
+  chart_specs << "series: [ #{series_config.join(', ')} ]"
+
+  f.puts "chart.draw(data, { #{chart_specs.join(', ')} });"
+  f.puts "</script>"
+
+f.puts <<END_HTML
+  </body>
+</html>
+END_HTML
+
+f.close
+
 
 
