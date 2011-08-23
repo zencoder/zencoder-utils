@@ -667,13 +667,15 @@ class StszBox < Box
 
   def read_data(stream)
     @version,@flags,@sample_size,@entry_count = stream.ui8, stream.ui24, stream.ui32, stream.ui32
-    @entry_count.times do |i|
-      @entries << stream.ui32
+    if @sample_size == 0
+      @entry_count.times do |i|
+        @entries << stream.ui32
+      end
     end
   end
 
   def print_extra_info(prefix = '')
-    if @entry_count != @entries.length
+    if @entry_count != @entries.length && @sample_size == 0
       print prefix
       cputs "Entry count doesn't match number of entries found!", :red
     end
@@ -1099,17 +1101,44 @@ class ChanSubBox < SubBox
 end
 
 
-# class AvccSubBox < SubBox
-#   handles 'avcC', 'AVC Compatibility'
-#
-#   attr_reader :version,
-#
-#   def read_header_data(stream)
-#   end
-#
-#   def print_extra_info(prefix = '')
-#   end
-# end
+class AvccSubBox < SubBox
+  handles 'avcC', 'AVC Configuration'
+
+  def read_header_data(stream)
+    @version = stream.ui8
+    @profile = stream.ui8
+    @profile_compat = stream.ui8
+    @level = stream.ui8
+    @nal_unit_length = (stream.ui8 & 3) + 1
+    @sequence_set_count = (stream.ui8 & 31)
+    @sequence_set_count.times do
+      len = stream.ui16
+      stream.read(len) # Just dump the nal unit info
+    end
+    @picture_set_count = stream.ui8
+    @picture_set_count.times do
+      len = stream.ui16
+      stream.read(len) # Just dump the nal unit info
+    end
+  end
+
+  def print_extra_info(prefix = '')
+    print prefix
+    cputs "Version: #{@version}", :dark_gray
+    print prefix
+    cputs "Profile: #{@profile}", :dark_gray
+    print prefix
+    cputs "Profile Compatibility: #{@profile_compat}", :dark_gray
+    print prefix
+    cputs "Level: #{@level}", :dark_gray
+    print prefix
+    cputs "NAL Unit Length: #{@nal_unit_length}", :dark_gray
+    print prefix
+    cputs "Sequence Set Count: #{@sequence_set_count}", :dark_gray
+    print prefix
+    cputs "Picture Set Count: #{@picture_set_count}", :dark_gray
+  end
+end
 
 
 #################################################################################
