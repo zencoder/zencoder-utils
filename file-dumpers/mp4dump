@@ -641,7 +641,7 @@ class StcoBox < Box
     end
     print prefix
     cputs "Entry Count: #{@entry_count}", :dark_gray
-    if $VERBOSE
+    if $VERBOSE2
       @entries.each do |entry|
         print prefix
         cputs "Chunk Offset: #{entry}", :dark_gray
@@ -683,7 +683,7 @@ class StszBox < Box
     cputs "Default Sample Size: #{@sample_size}", :dark_gray
     print prefix
     cputs "Entry Count: #{@entry_count}", :dark_gray
-    if $VERBOSE
+    if $VERBOSE2
       @entries.each do |entry|
         print prefix
         cputs "Sample Size: #{entry}", :dark_gray
@@ -1146,12 +1146,17 @@ end
 # rainbow
 
 $VERBOSE = false
+$VERBOSE2 = false
 $DEBUG = false
 
 error "Please specify a file to inspect." unless ARGV.length > 0
 
 if ARGV.first == '-v'
   $VERBOSE = true
+  ARGV.shift
+elsif ARGV.first == '-vv'
+  $VERBOSE = true
+  $VERBOSE2 = true
   ARGV.shift
 end
 
