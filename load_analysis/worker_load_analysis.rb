@@ -2,12 +2,13 @@
 
 TIME_OFFSET = -7.hours
 CLOUD_ID = 1
+ACCOUNT_ID = :all
+# ACCOUNT_ID = 2370
 EXCLUDE_LOW_PRIORITY = true
 
-DURATION = 24.hours
+DURATION = 6.hours
 START_TIME = Time.now - DURATION
-# START_TIME = Time.gm(2011,8,8,21,57,0)
-# START_TIME = Time.gm(2011,8,9,8,4,0)
+# START_TIME = Time.gm(2011,8,22,8,30,0)
 DATA_POINTS = 1440
 # DATA_POINTS = 6.hours / 15.seconds
 
@@ -17,6 +18,9 @@ input_scaling_data_sets = [:launched_workers, :active_workers, :launched_worker_
 
 scale_analysis_sets = [:launched_worker_input_capacity, :input_autoscale_threshold, :active_worker_input_capacity, :queued_inputs, :processing_inputs, :launched_worker_output_capacity, :output_autoscale_threshold, :active_worker_output_capacity, :queued_output_load, :processing_output_load]
 output_analysis_sets = [:launched_workers, :active_workers, :launched_worker_output_capacity, :output_autoscale_threshold, :active_worker_output_capacity, :queued_output_load, :processing_output_load]
+
+account_job_analysis = [:queued_inputs, :processing_inputs, :queued_outputs, :queued_output_load, :processing_outputs, :processing_output_load]
+account_job_analysis_without_capacities = [:queued_outputs, :processing_outputs, :queued_inputs, :processing_inputs]
 
 SETS_TO_SHOW = scale_analysis_sets
 
@@ -55,8 +59,13 @@ SETS_TO_SHOW = scale_analysis_sets
 puts "Querying database for data..."
 
 @workers = @cloud.workers.find(:all, :select => 'id,worker_type_id,state,created_at,alive_at,killed_at,updated_at,url,instance_id', :conditions => ["(killed_at >= ? OR (killed_at is null AND updated_at >= ?)) AND created_at < ?", @start_time, @start_time, @end_time])
-@inputs = @cloud.input_media_files.find(:all, :select => 'id,account_id,state,created_at,started_at,finished_at,times,low_priority', :conditions => ["(finished_at is null or finished_at >= ?) and created_at < ? and state != 'cancelled'", @start_time, @end_time])
-@outputs = @cloud.output_media_files.find(:all, :select => 'id,account_id,job_id,state,created_at,started_at,finished_at,times,low_priority,cached_queue_time,cached_total_time,estimated_transcode_load', :conditions => ["(finished_at is null or finished_at >= ?) and created_at < ? and state != 'cancelled'", @start_time, @end_time])
+if ACCOUNT_ID != :all
+  @inputs = @cloud.input_media_files.find(:all, :select => 'id,account_id,job_id,state,created_at,started_at,finished_at,times,low_priority', :conditions => ["(finished_at is null or finished_at >= ?) and created_at < ? and state != 'cancelled' and account_id = ?", @start_time, @end_time, ACCOUNT_ID])
+  @outputs = @cloud.output_media_files.find(:all, :select => 'id,account_id,job_id,state,created_at,started_at,updated_at,finished_at,times,low_priority,cached_queue_time,cached_total_time,estimated_transcode_load', :conditions => ["(finished_at is null or finished_at >= ?) and created_at < ? and state != 'cancelled' and account_id = ?", @start_time, @end_time, ACCOUNT_ID])
+else
+  @inputs = @cloud.input_media_files.find(:all, :select => 'id,account_id,job_id,state,created_at,started_at,finished_at,times,low_priority', :conditions => ["(finished_at is null or finished_at >= ?) and created_at < ? and state != 'cancelled'", @start_time, @end_time])
+  @outputs = @cloud.output_media_files.find(:all, :select => 'id,account_id,job_id,state,created_at,started_at,updated_at,finished_at,times,low_priority,cached_queue_time,cached_total_time,estimated_transcode_load', :conditions => ["(finished_at is null or finished_at >= ?) and created_at < ? and state != 'cancelled'", @start_time, @end_time])
+end
 
 puts "Queries finished."
 
@@ -97,6 +106,7 @@ end
 puts "Loaded worker data..."
 
 # @input_total_times = {}
+@input_finish_times = {} # By job ID.
 @input_time_data = []
 @inputs.each do |input|
   next unless input.finished_at || ['waiting','processing'].include?(input.state)
@@ -105,7 +115,8 @@ puts "Loaded worker data..."
   @input_time_data << { :type => :queued, :time => input.created_at.to_i }
   @input_time_data << { :type => :started, :time => (input.started_at || Time.now + 1.year).to_i}
   @input_time_data << { :type => :finished, :time => (input.finished_at || Time.now + 1.year).to_i}
-  
+
+  @input_finish_times[input.job_id.to_i] = input.finished_at
   # @input_total_times[input.id] = input.total_time rescue nil
 end
 @input_time_data = @input_time_data.sort_by { |d| d[:time] }
@@ -117,24 +128,32 @@ puts "Loaded input data..."
   next unless output.finished_at || ['ready','processing'].include?(output.state)
   next if EXCLUDE_LOW_PRIORITY && output.low_priority
 
-  # We'll figure out still-processing or still-ready files later...
-  next unless output.finished_at
-  
   # Will figure this out later too.
   next if output.state == 'failed'
   
-  if !output.cached_queue_time
-    puts "Don't know what to do with output #{output.id}!"
-    next
+  if output.finished_at.nil?
+    if output.state == 'ready'
+      processing_start = Time.now + 1.year
+      queue_start = output.updated_at
+    else # processing
+      processing_start = output.updated_at
+      queue_start = @input_finish_times[output.job_id.to_i] || output.created_at
+    end
+  else
+    if !output.cached_queue_time
+      puts "Don't know what to do with output #{output.id}!"
+      next
+    end
+
+    processing_start = output.finished_at - (output.transcode_time.to_f + output.upload_time.to_f)
+    queue_start = processing_start - output.cached_queue_time.to_f
   end
 
-  processing_start = output.finished_at - (output.transcode_time.to_f + output.upload_time.to_f)
-  queue_start = processing_start - output.cached_queue_time.to_f
   load = output.estimated_transcode_load || 200
 
   @output_time_data << { :type => :queued, :time => queue_start.to_i, :load => load }
   @output_time_data << { :type => :started, :time => processing_start.to_i, :load => load }
-  @output_time_data << { :type => :finished, :time => output.finished_at.to_i, :load => load }
+  @output_time_data << { :type => :finished, :time => (output.finished_at || Time.now + 1.year).to_i, :load => load }
 end
 @output_time_data = @output_time_data.sort_by { |d| d[:time] }
 puts "Loaded output data..."
@@ -262,6 +281,7 @@ END_HTML
 
   ############# SET UP INPUTS DATA ##############
   prev_point = 0
+  queued_subtractions = 0
   @input_time_data.each do |data|
     data_type = data[:type]
 
@@ -284,8 +304,9 @@ END_HTML
 
     while prev_point < point_loc
       [:queued_inputs, :processing_inputs].each do |data_set|
-        @data_points[data_set][prev_point + 1] = @data_points[data_set][prev_point]
+        @data_points[data_set][prev_point + 1] = @data_points[data_set][prev_point] - queued_subtractions
       end
+      queued_subtractions = 0
       prev_point += 1
     end
     
@@ -297,14 +318,15 @@ END_HTML
     when :started
       @data_points[:processing_inputs][point_loc] += 1
     when :finished
-      @data_points[:queued_inputs][point_loc] -= 1
-      @data_points[:processing_inputs][point_loc] -= 1
+      queued_subtractions += 1
     end
   end
   puts "  Input analysis done."
 
   ############# SET UP OUPUTS DATA ##############
   prev_point = 0
+  queued_subtractions = 0
+  queued_load_subtractions = 0
   @output_time_data.each do |data|
     data_type = data[:type]
 
@@ -328,9 +350,14 @@ END_HTML
     point_loc = DATA_POINTS + 1 if point_loc > DATA_POINTS
 
     while prev_point < point_loc
-      [:queued_outputs, :processing_outputs, :queued_output_load, :processing_output_load].each do |data_set|
-        @data_points[data_set][prev_point + 1] = @data_points[data_set][prev_point]
+      [:queued_outputs, :processing_outputs].each do |data_set|
+        @data_points[data_set][prev_point + 1] = @data_points[data_set][prev_point] - queued_subtractions
       end
+      [:queued_output_load, :processing_output_load].each do |data_set|
+        @data_points[data_set][prev_point + 1] = @data_points[data_set][prev_point] - queued_load_subtractions
+      end
+      queued_subtractions = 0
+      queued_load_subtractions = 0
       prev_point += 1
     end
     
@@ -344,10 +371,8 @@ END_HTML
       @data_points[:processing_outputs][point_loc] += 1
       @data_points[:processing_output_load][point_loc] += data[:load]
     when :finished
-      @data_points[:queued_outputs][point_loc] -= 1
-      @data_points[:queued_output_load][point_loc] -= data[:load]
-      @data_points[:processing_outputs][point_loc] -= 1
-      @data_points[:processing_output_load][point_loc] -= data[:load]
+      queued_subtractions += 1
+      queued_load_subtractions += data[:load]
     end
   end
   puts "  Output analysis done."
