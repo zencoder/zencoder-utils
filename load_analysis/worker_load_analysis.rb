@@ -1,15 +1,18 @@
 #/usr/bin/env ruby
 
+hour_count = (ARGV.shift || 6).to_i
+point_count = (ARGV.shift || 1440).to_i
+
 TIME_OFFSET = -7.hours
 CLOUD_ID = 1
 ACCOUNT_ID = :all
 # ACCOUNT_ID = 2370
 EXCLUDE_LOW_PRIORITY = true
 
-DURATION = 6.hours
+DURATION = hour_count.hours
 START_TIME = Time.now - DURATION
 # START_TIME = Time.gm(2011,8,22,8,30,0)
-DATA_POINTS = 1440
+DATA_POINTS = point_count
 # DATA_POINTS = 6.hours / 15.seconds
 
 all_data_sets = [:launched_workers, :active_workers, :bad_workers, :launched_worker_input_capacity, :active_worker_input_capacity, :bad_worker_input_capacity, :launched_worker_output_capacity, :active_worker_output_capacity, :bad_worker_output_capacity, :queued_inputs, :processing_inputs, :queued_outputs, :queued_output_load, :processing_outputs, :processing_output_load, :input_autoscale_threshold, :output_autoscale_threshold]

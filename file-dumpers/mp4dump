@@ -766,11 +766,9 @@ class ElstBox < Box
     end
     print prefix
     cputs "Entry Count: #{@entry_count}", :dark_gray
-    if $VERBOSE
-      @entries.each do |entry|
-        print prefix
-        cputs "Duration: #{entry[:duration]}, Media Time: #{entry[:media_time]}, Media Rate: #{entry[:media_rate]}", :dark_gray
-      end
+    @entries.each do |entry|
+      print prefix
+      cputs "Duration: #{entry[:duration]}, Media Time: #{entry[:media_time]}, Media Rate: #{entry[:media_rate]}", :dark_gray
     end
   end
 
@@ -1100,6 +1098,27 @@ class ChanSubBox < SubBox
   end
 end
 
+class ColrSubBox < SubBox
+  handles 'colr', 'Color Parameters'
+
+  def read_header_data(stream)
+    @parameter_type = stream.fourcc
+    @primaries = stream.ui16
+    @transfer = stream.ui16
+    @matrix = stream.ui16
+  end
+
+  def print_extra_info(prefix = '')
+    print prefix
+    cputs "Parameter type: #{@parameter_type}", :dark_gray
+    print prefix
+    cputs "Primaries index: #{@primaries}", :dark_gray
+    print prefix
+    cputs "Transfer function index: #{@transfer}", :dark_gray
+    print prefix
+    cputs "Matrix index: #{@matrix}", :dark_gray
+  end
+end
 
 class AvccSubBox < SubBox
   handles 'avcC', 'AVC Configuration'
