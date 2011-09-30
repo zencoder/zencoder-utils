@@ -138,8 +138,8 @@ def decode_file_properties_object(size)
   puts "  Broadcast flag: #{flags & 1}"
   puts "  Seekable flag: #{flags & 2}"
   puts "  Min packet size: #{min_packet_size}"
-  puts "  Max packet size: #{min_packet_size}"
-  puts "  Max bitrate: #{min_packet_size}"
+  puts "  Max packet size: #{max_packet_size}"
+  puts "  Max bitrate: #{max_bitrate}"
 
   if min_packet_size == max_packet_size
     puts "  NOTE: min/max packet size are equal -- treating file as constant packet size."

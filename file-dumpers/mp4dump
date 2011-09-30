@@ -1168,16 +1168,20 @@ $VERBOSE = false
 $VERBOSE2 = false
 $DEBUG = false
 
-error "Please specify a file to inspect." unless ARGV.length > 0
-
-if ARGV.first == '-v'
-  $VERBOSE = true
-  ARGV.shift
-elsif ARGV.first == '-vv'
-  $VERBOSE = true
-  $VERBOSE2 = true
-  ARGV.shift
+while ['-v','-vv','-nc'].include?(ARGV.first)
+  arg = ARGV.shift
+  case arg
+  when '-v'
+    $VERBOSE = true
+  when '-vv'
+    $VERBOSE = true
+    $VERBOSE2 = true
+  when '-nc'
+    $DISABLE_COLOR = true
+  end
 end
+
+error "Please specify a file to inspect." unless ARGV.length > 0
 
 input_filename = ARGV.first
 error "Input file not found." unless File.exist?(input_filename)

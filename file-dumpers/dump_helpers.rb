@@ -121,7 +121,7 @@ def cprint(message, color = :none)
     :dark_white => '0;37',
     :white => '1;37'
   }
-  if colors[color]
+  if colors[color] && !$DISABLE_COLOR
     print "\x1b[1;#{colors[color]}m#{message}\x1b[0m"
   else
     print message
