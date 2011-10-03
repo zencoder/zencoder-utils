@@ -96,6 +96,9 @@ end
 ######################### Colored Output #########################
 #
 
+# Only do color on tty outputs.  So piping to mate works, etc.
+$DISABLE_COLOR = !STDOUT.tty?
+
 # Colored print...
 def cprint(message, color = :none)
   colors = {

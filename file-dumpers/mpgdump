@@ -23,6 +23,53 @@ require 'stringio'
 
 def error(msg); puts msg; exit; end
 
+$DISABLE_COLOR = !STDOUT.tty?
+
+# Colored print...
+def cprint(message, color = $DEFAULT_COLOR)
+  colors = {
+    :black => '0;30',
+    :dark_gray => '1;30',
+    :dark_grey => '1;30',
+    :gray => '0',
+    :grey => '0',
+    :dark_red => '0;31',
+    :red => '1;31',
+    :dark_green => '0;32',
+    :green => '1;32',
+    :dark_yellow => '0;33',
+    :yellow => '1;33',
+    :dark_blue => '0;34',
+    :blue => '1;34',
+    :dark_purple => '0;35',
+    :dark_magenta => '0;35',
+    :purple => '1;35',
+    :magenta => '1;35',
+    :dark_cyan => '0;36',
+    :cyan => '1;36',
+    :dark_white => '0;37',
+    :white => '1;37'
+  }
+  if colors[color] && !$DISABLE_COLOR
+    print "\x1b[1;#{colors[color]}m#{message}\x1b[0m"
+  else
+    print message
+  end
+end
+
+def cputs(message, color = $DEFAULT_COLOR)
+  cprint(message+"\n", color)
+end
+
+def with_color(color, &block)
+  prev_color = $DEFAULT_COLOR
+  $DEFAULT_COLOR = color
+  block.call
+ensure
+  $DEFAULT_COLOR = prev_color
+end
+
+
 module IoHelpers
   def ui8; read2(1).unpack('C').first; end
   def ui16; read2(2).unpack('n').first; end
@@ -50,7 +97,7 @@ module IoHelpers
   end
 
   def pos2
-    pos - @peek_buffer.length
+    pos - @peek_buffer.to_s.length
   end
 
   def find_next_start_code
@@ -460,67 +507,68 @@ def read_ts_packet
   pos = $input_file.pos2
   packet = Bitstream.new($input_file.read2(188))
   if packet.getbits(8) == 0x47
-    puts "TS PACKET @ #{pos}"
+    with_color(:dark_gray) do
+      cputs "TS PACKET @ #{pos}"
 
-    tei  = packet.getbits(1)
-    pusi = packet.getbits(1)
-    tp   = packet.getbits(1)
-    pid  = packet.getbits(13)
-    scrambled = packet.getbits(2)
-    adaptation_present = packet.getbits(1)
-    payload_present = packet.getbits(1)
-    continuity_counter = packet.getbits(4)
+      tei  = packet.getbits(1)
+      pusi = packet.getbits(1)
+      tp   = packet.getbits(1)
+      pid  = packet.getbits(13)
+      scrambled = packet.getbits(2)
+      adaptation_present = packet.getbits(1)
+      payload_present = packet.getbits(1)
+      continuity_counter = packet.getbits(4)
 
-    puts "  TEI:  #{tei}"
-    puts "  PUSI: #{pusi}"
-    puts "  PRIO: #{tp}"
-    puts "  PID:  #{pid}"
-    puts "  Scrambled: #{scrambled}"
-    puts "  Has Adaptation? #{adaptation_present}"
-    puts "  Has Payload? #{payload_present}"
-    puts "  Cont. Count: #{continuity_counter}"
+      cputs "  TEI:  #{tei}"
+      cputs "  PUSI: #{pusi}"
+      cputs "  PRIO: #{tp}"
+      cputs "  PID:  #{pid}"
+      cputs "  Scrambled: #{scrambled}"
+      cputs "  Has Adaptation? #{adaptation_present}"
+      cputs "  Has Payload? #{payload_present}"
+      cputs "  Cont. Count: #{continuity_counter}"
     
-    if adaptation_present == 1
-      len_bytes = packet.getbits(8)
-      adaptation = Bitstream.new(packet.read(len_bytes))
+      if adaptation_present == 1
+        len_bytes = packet.getbits(8)
+        adaptation = Bitstream.new(packet.read(len_bytes))
 
-      discontinuous = adaptation.getbits(1)
-      random_access = adaptation.getbits(1)
-      es_priority = adaptation.getbits(1)
-      pcr = adaptation.getbits(1)
-      opcr = adaptation.getbits(1)
-      splicing_point = adaptation.getbits(1)
-      private_data = adaptation.getbits(1)
-      adaptation_extension = adaptation.getbits(1)
+        discontinuous = adaptation.getbits(1)
+        random_access = adaptation.getbits(1)
+        es_priority = adaptation.getbits(1)
+        pcr = adaptation.getbits(1)
+        opcr = adaptation.getbits(1)
+        splicing_point = adaptation.getbits(1)
+        private_data = adaptation.getbits(1)
+        adaptation_extension = adaptation.getbits(1)
 
-      puts "  Adaptation Extension:"
-      puts "    Discontinuous: #{discontinuous}"
-      puts "    Random Access: #{random_access}"
-      puts "    PCR? #{pcr}"
-      puts "    OPCR? #{opcr}"
+        cputs "  Adaptation Extension:"
+        cputs "    Discontinuous: #{discontinuous}"
+        cputs "    Random Access: #{random_access}"
+        cputs "    PCR? #{pcr}"
+        cputs "    OPCR? #{opcr}"
 
-      if pcr == 1
-        pcr_base = adaptation.getbits(33)
-        pcr_pad = adaptation.getbits(6)
-        pcr_ext = adaptation.getbits(9)
-        puts "    PCR: #{pcr_base},#{pcr_pad},#{pcr_ext}"
+        if pcr == 1
+          pcr_base = adaptation.getbits(33)
+          pcr_pad = adaptation.getbits(6)
+          pcr_ext = adaptation.getbits(9)
+          cputs "    PCR: #{pcr_base},#{pcr_pad},#{pcr_ext}"
+        end
+        if opcr == 1
+          opcr_base = adaptation.getbits(33)
+          opcr_pad = adaptation.getbits(6)
+          opcr_ext = adaptation.getbits(9)
+          cputs "    OPCR: #{opcr_base},#{opcr_pad},#{opcr_ext}"
+        end
       end
-      if opcr == 1
-        opcr_base = adaptation.getbits(33)
-        opcr_pad = adaptation.getbits(6)
-        opcr_ext = adaptation.getbits(9)
-        puts "    OPCR: #{opcr_base},#{opcr_pad},#{opcr_ext}"
+    
+      if payload_present
+        byte_count = (packet.remaining_bits / 8)
+        cputs "  Adding #{byte_count} bytes to PS stream."
+        # $ps_data.string << packet.data[-byte_count..-1]
+        $ps_data.string << packet.read(188) # read the rest
       end
+      puts
     end
-    
-    if payload_present
-      byte_count = (packet.remaining_bits / 8)
-      puts "  Adding #{byte_count} bytes to PS stream."
-      # $ps_data.string << packet.data[-byte_count..-1]
-      $ps_data.string << packet.read(188) # read the rest
-    end
-    puts
-    
   else
     puts "NOT AN MPEG-TS PACKET!"
   end
@@ -548,6 +596,34 @@ end
 
 # B3 9C F3 E9
 
+def decode_ps_stream(stream)
+  while start_code = stream.find_next_start_code
+    case start_code[3]
+    when 0x00
+      decode_picture_header
+    when 0xB3
+      decode_sequence_header
+    when 0xB8
+      decode_gop
+    when 0xBA
+      decode_pack_header
+    when 0xBB
+      decode_system_header
+    when 0xBF
+      decode_private_stream_2
+    when 0xC0..0xEF
+      decode_pes_header(start_code[3])
+    else
+      if STREAM_TYPES[start_code[3]]
+        puts "Found Start Code: 0x00000#{start_code.unpack('N').first.to_s(16)} = #{STREAM_TYPES[start_code[3]]}"
+      else
+        puts "Unknown Start Code: 0x00000#{start_code.unpack('N').first.to_s(16)}"
+      end
+    end
+    puts
+  end
+end
+
 first_byte = $input_file.peek(1)
 if first_byte[0] == 0x47
   format = :ts
@@ -557,15 +633,25 @@ else
   puts "MPEG-PS Format"
 end
 
+# if format == :ts
+#   $ps_data = StringIO.new('')
+#   while !$input_file.eof?
+#     read_ts_packet
+#     decode_ps_stream($ps_data)
+#   end
+# else
+#   decode_ps_stream($input_file)
+# end
+
 if format == :ts
   $ps_data = StringIO.new('')
   while !$input_file.eof?
     read_ts_packet
     while start_code = $ps_data.find_next_start_code
       if STREAM_TYPES[start_code[3]]
-        puts "Found Start Code: 0x00000#{start_code.unpack('N').first.to_s(16)} = #{STREAM_TYPES[start_code[3]]}"
+        cputs "Found Start Code: 0x00000#{start_code.unpack('N').first.to_s(16)} = #{STREAM_TYPES[start_code[3]]}", :yellow
       else
-        puts "Unknown Start Code: 0x00000#{start_code.unpack('N').first.to_s(16)}"
+        cputs "Unknown Start Code: 0x00000#{start_code.unpack('N').first.to_s(16)}", :red
       end
       puts
     end
@@ -597,4 +683,3 @@ else
     puts
   end
 end
-

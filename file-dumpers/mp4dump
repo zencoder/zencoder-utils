@@ -1176,8 +1176,6 @@ while ['-v','-vv','-nc'].include?(ARGV.first)
   when '-vv'
     $VERBOSE = true
     $VERBOSE2 = true
-  when '-nc'
-    $DISABLE_COLOR = true
   end
 end
 
