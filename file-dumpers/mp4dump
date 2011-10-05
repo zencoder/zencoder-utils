@@ -971,10 +971,10 @@ class ClapSubBox < SubBox
   attr_reader :width, :height, :h_offset, :v_offset
 
   def read_header_data(stream)
-    @width = stream.fixed64
-    @height = stream.fixed64
-    @h_offset = stream.fixed64
-    @v_offset = stream.fixed64
+    @width = stream.fixed64.round
+    @height = stream.fixed64.round
+    @h_offset = stream.fixed64.round
+    @v_offset = stream.fixed64.round
   end
 
   def print_extra_info(prefix = '')
@@ -1122,6 +1122,17 @@ end
 
 class AvccSubBox < SubBox
   handles 'avcC', 'AVC Configuration'
+  
+  PROFILES = {
+    66 => 'Baseline',
+    77 => 'Main',
+    88 => 'Extended'
+  }
+  COMPAT_FLAGS = {
+    128 => 'Baseline',
+     64 => 'Main',
+     32 => 'Extended'
+  }
 
   def read_header_data(stream)
     @version = stream.ui8
@@ -1145,11 +1156,18 @@ class AvccSubBox < SubBox
     print prefix
     cputs "Version: #{@version}", :dark_gray
     print prefix
-    cputs "Profile: #{@profile}", :dark_gray
+    cputs "Profile: #{@profile} (#{PROFILES[@profile] || 'Unknown'})", :dark_gray
     print prefix
-    cputs "Profile Compatibility: #{@profile_compat}", :dark_gray
+    if (@profile_compat & 0b11100000) > 0
+      compat_msg = ' ('
+      compat_msg += COMPAT_FLAGS.keys.map { |v| (@profile_compat & v > 0) ? COMPAT_FLAGS[v] : nil }.compact.join('/')
+      compat_msg += ')'
+    else
+      compat_msg = ''
+    end
+    cputs "Profile Compatibility: #{@profile_compat}#{compat_msg}", :dark_gray
     print prefix
-    cputs "Level: #{@level}", :dark_gray
+    cputs "Level: #{sprintf('%0.1f', @level / 10.0)}", :dark_gray
     print prefix
     cputs "NAL Unit Length: #{@nal_unit_length}", :dark_gray
     print prefix
