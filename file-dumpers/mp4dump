@@ -514,9 +514,11 @@ class SttsBox < Box
     end
     print prefix
     cputs "Entry Count: #{@entry_count}", :dark_gray
-    @entries.each do |entry|
-      print prefix
-      cputs "Sample Count: #{entry[:count]}, Duration: #{entry[:duration]}", :dark_gray
+    if $VERBOSE
+      @entries.each do |entry|
+        print prefix
+        cputs "Sample Count: #{entry[:count]}, Duration: #{entry[:duration]}", :dark_gray
+      end
     end
   end
 
