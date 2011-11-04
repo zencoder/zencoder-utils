@@ -341,13 +341,21 @@ while more_to_read
         end
 
         # Now offset points to the resolution values: [h_mb,w_mb,h_disp,w_disp]
+        enc_width = stream_bytes[offset+1] * 16
         disp_width = stream_bytes[offset+3] * 16
         h_adjust = (stream_bytes[0] >> 4) & 15
+
+        enc_height = stream_bytes[offset] * 16
         disp_height = stream_bytes[offset+2] * 16
         v_adjust = stream_bytes[0] & 0x0f
 
         width = disp_width - h_adjust
         height = disp_height - v_adjust
+
+        if enc_width != disp_width || enc_height != disp_height
+          puts "  Encoded Pixels: #{enc_width}"
+          puts "  Encoded Pixels: #{enc_height}"
+        end
 
         puts "  Video width: #{width} (#{disp_width} - #{h_adjust})"
         puts "  Video height: #{height} (#{disp_height} - #{v_adjust})"
