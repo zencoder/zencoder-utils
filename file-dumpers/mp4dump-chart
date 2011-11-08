@@ -1178,11 +1178,17 @@ end
 
 $VERBOSE = false
 $DEBUG = false
+$CHART_AUDIO = false
 
 error "Please specify a file to chart." unless ARGV.length > 0
 
 if ARGV.first == '-v'
   $VERBOSE = true
+  ARGV.shift
+end
+
+if ARGV.first == '-a'
+  $CHART_AUDIO = true
   ARGV.shift
 end
 
@@ -1201,13 +1207,17 @@ vbv_duration = vbv_bufsize.to_f / vbv_maxrate if vbv_maxrate && vbv_bufsize
 file = BoxFile.new(input_file)
 file.parse
 
-video_track = file.video_tracks.first
-error "No video track found!" unless video_track
+if $CHART_AUDIO
+  target_track = file.audio_tracks.first
+  error "No audio track found!" unless target_track
+else
+  target_track = file.video_tracks.first
+  error "No video track found!" unless target_track
+end
 
-
-timescale = video_track.first_descendant('mdhd').timescale
-stts = video_track.first_descendant('stts')
-stsz = video_track.first_descendant('stsz')
+timescale = target_track.first_descendant('mdhd').timescale
+stts = target_track.first_descendant('stts')
+stsz = target_track.first_descendant('stsz')
 
 sample_number = 0
 current_time = 0
@@ -1241,6 +1251,8 @@ stts.entries.each do |stts_entry|
 
     frames_info << { :time => time, :size => size, :duration => stts_entry[:duration], :prev_duration => prev_frame_duration }
 
+    fps_so_far = (sample_number + 1) / time if time > 0.01
+
     running_average_durations.each_with_index do |duration,index|
       running_averages[index] << size
 
@@ -1252,7 +1264,8 @@ stts.entries.each do |stts_entry|
         average_values << nil
       end
 
-      average_strings << "W=#{sprintf('%0.1f', duration)}: " + (avg ? sprintf('%0.3f', avg) : 'N/A')
+      # average_strings << "W=#{sprintf('%0.1f', duration)}: " + (avg ? sprintf('%0.3f', avg) : 'N/A')
+      average_strings << "W=#{sprintf('%0.1f', duration)}: " + (avg ? sprintf('%0.3f', (avg * fps_so_far) * 0.008) : 'N/A')
     end
 
     puts "#{sprintf('%0.3f', time)} - #{sprintf('%6d',size)} - " + average_strings.join(' - ')
