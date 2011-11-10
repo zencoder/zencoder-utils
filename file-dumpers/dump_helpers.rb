@@ -69,6 +69,17 @@ module IoHelpers
   # Fixed-point, 32.32
   def fixed64; ui64.to_f / (2**32); end
   
+  # Variable-length integer
+  def var_i
+    v = 0
+    b = ui8
+    while b >= 128
+      v = (v + (b & 0b01111111)) << 7
+      b = ui8
+    end
+    v + b
+  end
+
   def guid; parts = read(16).unpack('VvvnNn'); sprintf('%08x-%04x-%04x-%04x-%08x%04x', *parts).upcase; end
   def fourcc; read(4).unpack('a*').first; end
   
