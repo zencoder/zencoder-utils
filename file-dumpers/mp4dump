@@ -799,7 +799,7 @@ class Mp4aSubBox < SubBoxWithSubBoxes
       packet_size = @data_stream.si16 # Unused
       @sample_rate = @data_stream.ui16 + (@data_stream.ui16 / 65536.0) # 16.16 fixed-point
 
-      if version == 1
+      if version == 1 && (kind != 'alac' || @data_size > 100)
         samples_per_packet = @data_stream.ui32
         bytes_per_packet = @data_stream.ui32
         bytes_per_frame = @data_stream.ui32
@@ -832,6 +832,66 @@ class Mp4aSubBox < SubBoxWithSubBoxes
     cputs "Channels: #{@channels}", :dark_gray
     print prefix
     cputs "Sample Size: #{@sample_size}", :dark_gray
+    print prefix
+    cputs "Sample Rate: #{@sample_rate}", :dark_gray
+  end
+end
+
+class AlacSubBox < SubBox
+  handles 'alac', 'ALAC Audio Description'
+
+  attr_accessor :channels, :sample_size, :sample_rate
+
+  class << self
+    def new (*args)
+      return Mp4aSubBox.new(*args) if args[3][:parent].kind == 'stsd'
+      super
+    end
+  end
+
+  def read_header_data(stream)
+    return if @data_size < 16
+
+    if @data_size == 12
+    else
+      version_flags = @data_stream.ui32
+
+      ###
+
+      frame_length = @data_stream.ui32
+      compatible_version = @data_stream.ui8
+      @bit_depth = @data_stream.ui8
+      pb = @data_stream.ui8
+      mb = @data_stream.ui8
+      kb = @data_stream.ui8
+      @channels = @data_stream.ui8
+      max_run = @data_stream.ui16
+      max_frame_bytes = @data_stream.ui32
+      average_bitrate = @data_stream.ui32
+      @sample_rate = @data_stream.ui32
+
+      if @data_size >= 52
+        # Also have channel layout info...
+        # typedef struct ALACChannelLayoutInfo
+        # {
+        #         uint32_t        channelLayoutInfoSize;
+        #         uint32_t        channelLayoutInfoID;
+        #         uint32_t        versionFlags;
+        #         uint32_t        channelLayoutTag;
+        #         uint32_t        reserved1;
+        #         uint32_t        reserved2;
+        # } ALACChannelLayoutInfo;
+      end
+
+    end
+
+  end
+
+  def print_extra_info(prefix = '')
+    print prefix
+    cputs "Channels: #{@channels}", :dark_gray
+    print prefix
+    cputs "Bit Depth: #{@bit_depth}", :dark_gray
     print prefix
     cputs "Sample Rate: #{@sample_rate}", :dark_gray
   end
@@ -1124,7 +1184,7 @@ end
 
 class AvccSubBox < SubBox
   handles 'avcC', 'AVC Configuration'
-  
+
   PROFILES = {
     66 => 'Baseline',
     77 => 'Main',
