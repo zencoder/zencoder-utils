@@ -36,7 +36,7 @@ module IoHelpers
   def si24; read(3).unpack('cCC').inject(0) { |s,v| (s << 8) + v }; end
   def si32; read(4).unpack('cCCC').inject(0) { |s,v| (s << 8) + v }; end
   def si64; read(8).unpack('cCCCCCCC').inject(0) { |s,v| (s << 8) + v }; end
-  
+
   # Big-Endian Float Readers
   def f32; read(4).unpack('g').first; end
   def f64; read(8).unpack('G').first; end
@@ -46,7 +46,7 @@ module IoHelpers
   def word; read(2).unpack('v').first; end
   def dword; read(4).unpack('V').first; end
   def qword; read(8).unpack('Q').first; end
-  
+
   # Little-Endian Signed Readers (Assuming Intel 64-bit architecture)
   def char; read(1).unpack('c').first; end
   def short; read(2).unpack('s').first; end
@@ -62,13 +62,13 @@ module IoHelpers
 
   # Fixed-point, 16.16
   def fixed32; ui32.to_f / (2**16); end
-  
+
   # Fixed-point, 2.30
   def fixed32_2; ui32.to_f / (2**30); end
 
   # Fixed-point, 32.32
   def fixed64; ui64.to_f / (2**32); end
-  
+
   # Variable-length integer
   def var_i
     v = 0
@@ -82,7 +82,7 @@ module IoHelpers
 
   def guid; parts = read(16).unpack('VvvnNn'); sprintf('%08x-%04x-%04x-%04x-%08x%04x', *parts).upcase; end
   def fourcc; read(4).unpack('a*').first; end
-  
+
   def read_wchars(count)
     buffer = []
     count.times do
@@ -100,6 +100,97 @@ end
 require 'stringio'
 class StringIO
   include IoHelpers
+end
+
+
+class Bitstream
+  attr_accessor :bit_offset, :data
+
+  def initialize(data_string, starting_byte_offset = 0)
+    @data = data_string
+    @bit_offset = 0
+    @pos = starting_byte_offset
+  end
+
+  def nextbits(count)
+    raise "nextbits of more than 16 not implemented" if count > 16
+    getbits_internal(count, false)
+  end
+
+  # Return an integer of the next _count_ bits and increment @bit_offset so that
+  # subsequent calls will get following bits.
+  def getbits(count)
+    value = 0
+    while count > 16
+      value += getbits_internal(16)
+      count -= 16
+      value = value << [count,16].min
+    end
+    value += getbits_internal(count)
+  end
+
+  def skipbits(count)
+    @bit_offset += count
+  end
+
+  # Do getbits, with up to 16 bits.
+  def getbits_internal(count, increment_position = true)
+    return 0 if count > 16 || count < 1
+    byte = @bit_offset / 8
+    bit  = @bit_offset % 8
+    val = (@data[@pos + byte].to_i << 16) + (@data[@pos + byte + 1].to_i << 8) + @data[@pos + byte + 2].to_i
+    val = (val << bit) & 16777215
+    val = val >> (24 - count)
+
+    @bit_offset += count if increment_position
+    return val
+  end
+
+  def append(data_string)
+    @data << data_string
+  end
+
+  # Remove any data that we've moved past already, so we don't build up too much in memory.
+  def pop
+    byte = @bit_offset / 8
+    bit = @bit_offset % 8
+
+    @pos += byte
+    @bit_offset = bit
+
+    if @pos > 0
+      @data = @data[@pos..-1]
+      @pos = 0
+    end
+
+    true
+  end
+
+  def read(size)
+    if @bit_offset % 8 > 0
+      puts "Warning: Reading at non-aligned bitstream offset"
+    end
+    byte = @bit_offset / 8
+    @bit_offset = [@bit_offset + size * 8, @data.length * 8].min
+    @data[byte,size]
+  end
+
+  def remaining_bits
+    @data.length * 8 - @bit_offset
+  end
+
+  # Special data types
+
+  def ue_v
+    power = 0
+    power += 1 while (getbits(1) == 0 && (remaining_bits > 0))
+    additional = getbits(power)
+    2**power - 1 + additional
+  end
+  def se_v
+    k = ue_v
+    (-1) ** (k+1) * (k / 2.0).ceil
+  end
 end
 
 

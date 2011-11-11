@@ -1188,13 +1188,16 @@ class AvccSubBox < SubBox
   PROFILES = {
     66 => 'Baseline',
     77 => 'Main',
-    88 => 'Extended'
+    88 => 'Extended',
+    100 => 'High'
   }
   COMPAT_FLAGS = {
     128 => 'Baseline',
      64 => 'Main',
      32 => 'Extended'
   }
+
+  attr_accessor :sps_units, :pps_units
 
   def read_header_data(stream)
     @version = stream.ui8
@@ -1205,12 +1208,14 @@ class AvccSubBox < SubBox
     @sequence_set_count = (stream.ui8 & 31)
     @sequence_set_count.times do
       len = stream.ui16
-      stream.read(len) # Just dump the nal unit info
+      @sps_units ||= []
+      @sps_units << stream.read(len)
     end
     @picture_set_count = stream.ui8
     @picture_set_count.times do
       len = stream.ui16
-      stream.read(len) # Just dump the nal unit info
+      @pps_units ||= []
+      @pps_units << stream.read(len)
     end
   end
 
@@ -1234,9 +1239,291 @@ class AvccSubBox < SubBox
     cputs "NAL Unit Length: #{@nal_unit_length}", :dark_gray
     print prefix
     cputs "Sequence Set Count: #{@sequence_set_count}", :dark_gray
+    print_sps_units(prefix+'  ') if $VERBOSE
     print prefix
     cputs "Picture Set Count: #{@picture_set_count}", :dark_gray
   end
+
+  def print_sps_units(prefix = '')
+    # SPS
+    # 67 42 C0 1E DB 02 80 BF E5 C0 44 00 00 03 01 F4 00 00 5D AA 3C 58 BB 80
+    #
+    # 67 = 0,11,00111 = zero bit, ref_idc, unit_type (7=seq_parameter_set_rbsp)
+    # 42 = profile IDC
+    # C0 = constraint flags plus reserved
+    # 1E = level
+    #
+    # 1101 1011 0000 0010 1000 0000 1011 1111 1110 0101 1100 1000 1000
+    #
+    #
+    #
+
+    # -----------------------------
+
+    # 27 64 00 28 AD 00 D3 03 00 EF E2 30 11 00 00 0F A4 00 03 A9 80 E8 60 00 F4 24 00 01 12 A8 AE F2 E3 43 00 07 A1 20 00 08 95 45 77 97 0E E1 10 8A 2C
+    #
+    # 27 = 0,01,00111,
+    #
+    # 0110 0100 = profile (100)
+    # 0000 0000 = constraint flags
+    # 0010 1000 = level (40)
+    # 1 = sps_id = 0
+    # 010 = chroma_format_idc (1)
+    # 11 = bit depth (luma = 0, chroma = 0)
+    # 0 = qpprime flag
+    # 1 = seq_scaling_matrix_present flag (8 entries)
+    #   0000 0000 = none present
+    # 1 = log2_max_frame_num_minus4 (0)
+    # 1 = pic_order_cnt_type (0)
+    # 010 = log2_max_pic_order_cnt_lsb_minus4 (1)
+    # 011 = max_ref_frames (2)
+    # 0 = gaps_allowed flag
+    # 00000110000 = mb_width_minus_1 = 47
+    # 000011101 = mb_height_minus_1 = 28
+    # 111 1110 0010 0011 0000 0001 0001 0000 0000 0000 0000 0000 1111
+    #
+    #
+
+    # PPS
+    # 68 CA 81 3C 80
+    #
+
+    @sps_units.each do |unit_data|
+      header_byte = unit_data[0]
+      if header_byte >= 128
+        print prefix
+        cputs "Invalid nal unit!", :red
+        next
+      end
+
+      ref_idc = header_byte >> 5
+      unit_type = header_byte & 0b11111
+
+      clean_data = []
+
+      nal_size = unit_data.length
+      i = 1
+      while i < nal_size
+        if i + 2 < nal_size && unit_data[i,3] == "\x00\x00\x03"
+          clean_data << unit_data[i]
+          clean_data << unit_data[i]
+          i += 2
+        else
+          clean_data << unit_data[i]
+        end
+        i += 1
+      end
+
+      unit = Bitstream.new(clean_data, 0)
+
+      profile = unit.getbits(8)
+      constraint_flags = unit.getbits(8)
+      level = unit.getbits(8)
+      sps_id = unit.ue_v
+
+      print prefix
+      cputs "NAL unit type: #{unit_type}", :dark_gray
+      print prefix+'  '
+      cputs "Profile: #{profile} (#{PROFILES[profile] || 'Unknown'})", :dark_gray
+      print prefix+'  '
+      cputs "Level: #{sprintf('%0.1f', level / 10.0)}", :dark_gray
+      print prefix+'  '
+      cputs "SPS ID: #{sps_id}", :dark_gray
+
+      if [100,110,122,244,44,83,86,118,128].include?(profile)
+        chroma_format_idc = unit.ue_v
+        if chroma_format_idc == 3
+          separate_color_plane_flag = unit.getbits(1)
+        else
+          separate_color_plane_flag = 0
+        end
+
+        bit_depth_luma_minus8 = unit.ue_v
+        bit_depth_chroma_minus8 = unit.ue_v
+
+        qpprime_y_zero_transform_bypass_flag = unit.getbits(1)
+        seq_scaling_matrix_present_flag = unit.getbits(1)
+
+        if seq_scaling_matrix_present_flag == 1
+          entry_count = (chroma_format_idc != 3) ? 8 : 12
+          entry_count.times do |i|
+            if unit.getbits(1) == 1
+              read_scaling_list(unit, (i < 6) ? 16 : 64)
+            end
+          end
+        end
+
+      else
+        chroma_format_idc = 1
+        separate_color_plane_flag = 0
+        bit_depth_luma_minus8 = 0
+        bit_depth_chroma_minus8 = 0
+      end
+
+      if separate_color_plane_flag == 1
+        chroma_array_type = 0
+      else
+        chroma_array_type = chroma_format_idc
+      end
+
+      case chroma_format_idc
+      when 1
+        sub_width_c, sub_height_c = 2, 2
+      when 2
+        sub_width_c, sub_height_c = 2, 1
+      else
+        sub_width_c, sub_height_c = 1, 1
+      end
+
+      mb_width_c = 16 / sub_width_c
+      mb_height_c = 16 / sub_height_c
+
+      max_frame_num = 2 ** (unit.ue_v + 4)
+      pic_order_count_type = unit.ue_v
+
+      if pic_order_count_type == 0
+        log2_max_pic_order_cnt_lsb_minus4 = unit.ue_v
+      elsif pic_order_count_type == 1
+        delta_pic_order_always_zero_flag = unit.getbits(1)
+        offset_for_non_ref_pic = unit.se_v
+        offset_for_top_to_bottom_field = unit.se_v
+        num_ref_frames_in_pic_order_cnt_cycle = unit.ue_v
+
+        offset_for_ref_frame = []
+        num_ref_frames_in_pic_order_cnt_cycle.times do
+          offset_for_ref_frame << unit.se_v
+        end
+      end
+
+      max_num_ref_frames = unit.ue_v
+      gaps_in_frame_num_value_allowed_flag = unit.getbits(1)
+
+      pic_width_in_mbs_minus1 = unit.ue_v
+      pic_height_in_map_units_minus1 = unit.ue_v
+      frame_mbs_only_flag = unit.getbits(1)
+
+      if frame_mbs_only_flag == 0
+        mb_adaptive_frame_field_flag = unit.getbits(1)
+      else
+        mb_adaptive_frame_field_flag = 0
+      end
+
+      frame_height_in_mbs = (2-frame_mbs_only_flag) * (pic_height_in_map_units_minus1 + 1)
+
+      print prefix+'  '
+      cputs "Max Frame Num: #{max_frame_num}", :dark_gray
+      print prefix+'  '
+      cputs "Max Ref Frames: #{max_num_ref_frames}", :dark_gray
+
+      print prefix+'  '
+      cputs "Chroma Format: #{chroma_format_idc} (" + (['Mono','4:2:0','4:2:2','4:4:4'][chroma_format_idc] || 'Unknown') + ")", :dark_gray
+      print prefix+'  '
+      cputs "Bit Depth: #{bit_depth_luma_minus8 + 8} (luma), #{bit_depth_chroma_minus8 + 8} (chroma)", :dark_gray
+      print prefix+'  '
+      cputs "Macroblock Width: #{pic_width_in_mbs_minus1 + 1} (#{(pic_width_in_mbs_minus1 + 1) * 16} pixels luma, #{(pic_width_in_mbs_minus1 + 1) * mb_width_c} pixels chroma)", :dark_gray
+      print prefix+'  '
+      cputs "Map Unit Height: #{pic_height_in_map_units_minus1 + 1} (#{frame_height_in_mbs * 16} pixels luma, #{frame_height_in_mbs * mb_height_c} pixels chroma)", :dark_gray
+
+
+      direct_8x8_inference_flag = unit.getbits(1)
+
+      frame_cropping_flag = unit.getbits(1)
+      if frame_cropping_flag == 1
+        crop_offsets = []
+        4.times { crop_offsets << unit.ue_v }
+        print prefix+'  '
+        cputs "Frame cropping offsets: " + crop_offsets.join(', ') + ' (L,R,T,B)', :dark_gray
+
+        if chroma_array_type == 0
+          crop_unit_x = 1
+          crop_unit_y = 2 - frame_mbs_only_flag
+        else
+          crop_unit_x = sub_width_c
+          crop_unit_y = sub_height_c * (2 - frame_mbs_only_flag)
+        end
+
+        croprect = []
+        croprect << (crop_unit_x * crop_offsets[0])
+        croprect << (crop_unit_y * crop_offsets[2])
+        croprect << ((pic_width_in_mbs_minus1 + 1) * 16 - (crop_unit_x * crop_offsets[1] + 1))
+        croprect << (frame_height_in_mbs * 16 - (crop_unit_y * crop_offsets[3] + 1))
+
+        croprect << (croprect[2] - croprect[0] + 1)
+        croprect << (croprect[3] - croprect[1] + 1)
+
+        print prefix+'  '
+        cputs "Frame crop rectangle: (#{croprect[0]},#{croprect[1]})-(#{croprect[2]},#{croprect[3]}) = (#{croprect[4]},#{croprect[5]})", :dark_gray
+      end
+
+      vui_parameters_present_flag = unit.getbits(1)
+
+      print prefix+'  '
+      cputs "VUI parameters present: #{vui_parameters_present_flag}", :dark_gray
+      if vui_parameters_present_flag == 1
+
+        aspect_ratio_info_present_flag = unit.getbits(1)
+        if aspect_ratio_info_present_flag == 1
+          aspect_ratio_idc = unit.getbits(8)
+          if aspect_ratio_idc == 255
+            sar_width = unit.getbits(16)
+            sar_height = unit.getbits(16)
+            print prefix+'  '
+            cputs "Sample Aspect Ratio: #{sar_width}:#{sar_height}", :dark_gray
+          else
+            print prefix+'  '
+            aspect_descriptions = ['Unspecified','1:1','12:11','10:11','16:11','40:33','24:11','20:11','32:11','80:33','18:11','15:11','64:33','160:99','4:3','3:2','2:1']
+            cputs "Sample Aspect Ratio: #{aspect_descriptions[aspect_ratio_idc] || 'Unknown'}", :dark_gray
+          end
+        end
+
+        overscan_info_present_flag = unit.getbits(1)
+        if overscan_info_present_flag == 1
+          overscan_appropriate_flag = unit.getbits(1)
+          print prefix+'  '
+          cputs "Overscan Appropriate: #{overscan_appropriate_flag}", :dark_gray
+        end
+
+        video_signal_type_present_flag = unit.getbits(1)
+        if video_signal_type_present_flag == 1
+          video_format = unit.getbits(3)
+          video_full_range_flag = unit.getbits(1)
+          print prefix+'  '
+          cputs "Video Format: #{video_format}", :dark_gray
+          print prefix+'  '
+          cputs "Video Full Range Flag: #{video_full_range_flag}", :dark_gray
+
+          color_description_preset_flag = unit.getbits(1)
+          if color_description_preset_flag == 1
+            color_primaries = unit.getbits(8)
+            transfer_characteristics = unit.getbits(8)
+            matrix_coefficients = unit.getbits(8)
+
+            print prefix+'  '
+            cputs "Color Description: primaries=#{color_primaries}, transfer=#{transfer_characteristics}, matrix=#{matrix_coefficients}", :dark_gray
+          end
+        end
+      end
+    end
+
+  end
+
+  def read_scaling_list(unit, size)
+    # Read and dump the scaling list...
+    scaling_list = []
+    last_scale = 8
+    next_scale = 8
+
+    size.times do |j|
+      if next_scale != 0
+        delta_scale = unit.se_v
+        next_scale = (last_scale + delta_scale + 256) % 256
+      end
+      scaling_list[j] = (next_scale == 0) ? last_scale : next_scale
+      last_scale = scaling_list[j]
+    end
+
+  end
+
 end
 
 
