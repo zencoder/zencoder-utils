@@ -237,11 +237,19 @@ class TkhdBox < Box
   def read_data(stream)
     version = stream.ui8
     @flags = stream.ui24
-    ctime = stream.ui32 # Seconds since Jan 1, 1904
-    mtime = stream.ui32 # Seconds since Jan 1, 1904
-    @track_id = stream.ui32
-    reserved = stream.read(4)
-    @duration = stream.ui32
+    if version == 1
+      ctime = stream.ui64 # Seconds since Jan 1, 1904
+      mtime = stream.ui64 # Seconds since Jan 1, 1904
+      @track_id = stream.ui32
+      reserved = stream.read(4)
+      @duration = stream.ui64
+    else
+      ctime = stream.ui32 # Seconds since Jan 1, 1904
+      mtime = stream.ui32 # Seconds since Jan 1, 1904
+      @track_id = stream.ui32
+      reserved = stream.read(4)
+      @duration = stream.ui32
+    end
     reserved = stream.read(8)
     @layer = stream.si16
     alt_group = stream.ui16
