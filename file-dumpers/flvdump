@@ -389,7 +389,7 @@ while more_to_read
       packet_type = input_file.ui8
       bytes_read = 2
 
-      puts "  Packet Type: %s" % ({0 => 'AVC Sequency Header', 1 => 'AVC NALU', 2 => 'AVC end of sequence'}[packet_type] || 'unknown')
+      puts "  Packet Type: %s" % ({0 => 'AVC Sequence Header', 1 => 'AVC NALU', 2 => 'AVC end of sequence'}[packet_type] || 'unknown')
       if packet_type == 1 && size >= 5
         composition_time = input_file.si24
         bytes_read += 3
