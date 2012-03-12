@@ -55,6 +55,7 @@ GUIDS = {
   :asf_payload_extension_system_pixel_aspect_ratio                   => '1B1EE554-F9EA-4BC8-821A-376B74E4C4B8',
   :asf_payload_extension_system_sample_duration                      => 'C6BD9450-867F-4907-83A3-C77921B733AD',
   :asf_payload_extension_system_timecode                             => '399595EC-8667-4E2D-8FDB-98814CE76C1E',
+  :asf_payload_extension_system_degradable_jpeg                      => '00E1AF06-7BEC-11D1-A582-00C04FC29CFB',
   :asf_reserved_1                                                    => 'ABD3D211-A9BA-11CF-8EE6-00C00C205365',
   :asf_reserved_2                                                    => '86D15241-311D-11D0-A3A4-00A0C90348F6',
   :asf_reserved_3                                                    => '4B1ACBE3-100B-11D0-A39B-00A0C90348F6',
@@ -235,19 +236,48 @@ def decode_extended_stream_properties_object(size)
   stream_number = @input_file.word
   stream_language = @input_file.word
   avg_time_per_frame = @input_file.qword
-  
+  stream_name_count = @input_file.word
+  payload_extension_system_count = @input_file.word
+
+  bytes_read = 88
+
   puts "    Stream number: #{stream_number}"
   puts "    Start time: #{start_time}"
   puts "    End time: #{end_time}"
   puts "    Data bitrate: #{data_bitrate}"
   puts "    Buffer size: #{buffer_size}"
   puts "    Avg time per frame: #{avg_time_per_frame / 10000000.0} seconds (#{10000000.0 / avg_time_per_frame} fps)"
+  puts "    Stream Name Count: #{stream_name_count}"
+  puts "    Payload Extension System Count: #{payload_extension_system_count}"
   puts "      Reliable flag: #{flags & 1}"
   puts "      Seekable flag: #{flags & 2}"
   puts "      No cleanpoint flag: #{flags & 4}"
   puts "      Resend live cleanpoints flag: #{flags & 8}"
-  
-  @input_file.read(size - 84)
+
+  stream_name_count.times do |i|
+    sn_lang = @input_file.word
+    sn_len = @input_file.word
+    sn_name = @input_file.read(sn_len)
+    puts "      Stream name #{i+1}: #{sn_name}"
+    bytes_read += 4 + sn_len
+  end
+
+  payload_extension_system_count.times do |i|
+    pes_guid = @input_file.guid
+    pes_size = @input_file.word
+    pes_info_len = @input_file.dword
+    pes_info = @input_file.read(pes_info_len)
+    bytes_read += 22 + pes_info_len
+    puts "      Payload Extension System #{i+1} kind: #{look_up_object_type(pes_guid)}"
+    puts "      Payload Extension System #{i+1} size: #{pes_size == 65535 ? 'Variable' : pes_size}"
+    if pes_info_len > 0
+      puts "      Payload Extension System #{i+1} info size: #{pes_info_len}"
+      puts "      Payload Extension System #{i+1} info: #{pes_info}"
+    end
+    @stream_extension_systems[stream_number] << { :guid => pes_guid, :size => pes_size, :info => pes_info }
+  end
+
+  @input_file.read(size - bytes_read) if bytes_read < size
 end
 
 def decode_stream_bitrate_properties_object(size)
@@ -422,6 +452,7 @@ error "Input file not found." unless File.exist?(input_filename)
 
 file_size = File.size(input_filename)
 @input_file = File.open(input_filename)
+@stream_extension_systems = Hash.new { |h,k| h[k] = [] }
 
 signature = @input_file.guid
 error "Not a WMV file." unless signature == GUIDS[:asf_header_object]
@@ -487,6 +518,8 @@ def read_varying_type(length_type)
     @input_file.dword
   end
 end
+
+puts @stream_extension_systems.inspect
 
 puts
 puts "BODY: (offset #{@input_file.pos})"
@@ -599,6 +632,28 @@ packet_count.times do |packet_number|
         if replicated_data_length > 1
           puts "    Replicated data, size of media object: #{replicated_data[0,4].unpack('V').first} bytes"
           puts "    Replicated data, pts of media object: #{replicated_data[4,4].unpack('V').first} ms"
+
+          es_offset = 8
+          @stream_extension_systems[stream_number & 127].each do |es|
+            es_data = nil
+            if es[:size] == 65535 && (es_offset+2) < replicated_data_length
+              es_size = replicated_data[es_offset, 2].unpack('n').first
+              es_offset += 2
+              next unless (es_offset + es_size) < replicated_data_length
+              es_data = replicated_data[es_offset, es_size]
+              es_offset += 2
+            elsif (es_offset+es[:size]) < replicated_data_length
+              es_data = replicated_data[es_offset, es[:size]]
+              es_offset += es[:size]
+            end
+            if es_data
+              if es[:guid] == GUIDS[:asf_payload_extension_system_pixel_aspect_ratio]
+                puts "    Replicated data, pixel aspect ratio: #{es_data.unpack('CC').join('/')}"
+              else
+                puts "    Replicated data has #{es_data.length} bytes of data for #{look_up_object_type(es[:guid])}"
+              end
+            end
+          end
         end
 
       end
@@ -623,6 +678,28 @@ packet_count.times do |packet_number|
       replicated_data = @input_file.read(replicated_data_length)
       puts "    Replicated data, size of media object: #{replicated_data[0,4].unpack('V').first} bytes"
       puts "    Replicated data, pts of media object: #{replicated_data[4,4].unpack('V').first} ms"
+
+      es_offset = 8
+      @stream_extension_systems[stream_number & 127].each do |es|
+        es_data = nil
+        if es[:size] == 65535 && (es_offset+2) < replicated_data_length
+          es_size = replicated_data[es_offset, 2].unpack('n').first
+          es_offset += 2
+          next unless (es_offset + es_size) < replicated_data_length
+          es_data = replicated_data[es_offset, es_size]
+          es_offset += 2
+        elsif (es_offset+es[:size]) < replicated_data_length
+          es_data = replicated_data[es_offset, es[:size]]
+          es_offset += es[:size]
+        end
+        if es_data
+          if es[:guid] == GUIDS[:asf_payload_extension_system_pixel_aspect_ratio]
+            puts "    Replicated data, pixel aspect ratio: #{es_data.unpack('CC').join('/')}"
+          else
+            puts "    Replicated data has #{es_data.length} bytes of data for #{look_up_object_type(es[:guid])}"
+          end
+        end
+      end
     end
 
 
