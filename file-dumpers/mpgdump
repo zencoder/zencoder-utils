@@ -260,6 +260,50 @@ FRAME_TYPE_TABLE = {
 }
 FRAME_TYPE_TABLE.default = 'Unknown'
 
+COLOR_PRIMS_TABLE = {
+  0 => 'Forbidden',
+  1 => 'BT.709',
+  2 => 'Unspecified',
+  3 => 'Reserved/future',
+  4 => 'BT.470-6/NTSC 1953',
+  5 => 'EBU Tech 3213',
+  6 => 'SMPTE RP 145',
+  7 => 'SMPTE 240M',
+  8 => 'Generic film'
+}
+COLOR_PRIMS_TABLE.default = 'Unknown'
+
+TRANSFER_CHARS_TABLE = {
+  0 => 'Forbidden',
+  1 => 'BT.709',
+  2 => 'Unspecified',
+  3 => 'Reserved/future',
+  4 => 'Display gamma 2.2',
+  5 => 'Display gamma 2.8',
+  6 => 'BT.709', # Yes, a dupe.
+  7 => 'SMPTE 240M',
+  8 => 'Linear',
+  9 => 'Log (10^2:1)',
+  10 => 'Log (10^2.5:1)',
+  11 => 'xvYCC',
+  12 => 'BT.1361'
+}
+TRANSFER_CHARS_TABLE.default = 'Reserved'
+
+MATRIX_COEFFS_TABLE = {
+  0 => 'Forbidden/BR',
+  1 => 'BT.709',
+  2 => 'Unspecified',
+  3 => 'Reserved/future',
+  4 => 'BT.601',
+  5 => 'BT.601', # dupe
+  6 => 'BT.601', # dupe
+  7 => 'SMPTE 240M',
+  8 => "Y'CgCo"
+}
+MATRIX_COEFFS_TABLE.default = 'Reserved'
+
+
 
 #######################################################################
 
@@ -373,6 +417,81 @@ def decode_sequence_header
 
   if non_intra_matrix_flag == 1
     $input_file.read2(64)
+  end
+end
+
+def decode_extension
+  puts "Found 0x000001B5 = Extension:"
+  leading_byte = $input_file.peek(1).unpack('C').first
+  kind = leading_byte >> 4
+
+  case kind
+  when 1
+    puts "  Sequence Extension"
+    ext_data = Bitstream.new($input_file.read2(6))
+    junk = ext_data.getbits(4)
+    profile_and_level = ext_data.getbits(8)
+    progressive_sequence = ext_data.getbits(1)
+    chroma_format = ext_data.getbits(2)
+    horiz_size_ext = ext_data.getbits(2)
+    vert_size_ext = ext_data.getbits(2)
+    bitrate_ext = ext_data.getbits(12)
+    junk = ext_data.getbits(1)
+    vbv_bufsize_ext = ext_data.getbits(8)
+    low_delay = ext_data.getbits(1)
+    fps_n_ext = ext_data.getbits(2)
+    fps_d_ext = ext_data.getbits(5)
+
+    puts "  Profile/Level:   #{profile_and_level}"
+    puts "  Progressive Seq: #{progressive_sequence}"
+    puts "  Chroma Format:   #{chroma_format}"
+    puts "  Horiz Size Ext:  #{horiz_size_ext}"
+    puts "  Vert Size Ext:   #{vert_size_ext}"
+    puts "  Bitrate Ext:     #{bitrate_ext}"
+    puts "  VBV Bufsize Ext: #{vbv_bufsize_ext}"
+    puts "  Low Delay:       #{low_delay}"
+    puts "  FPS N Ext:       #{fps_n_ext}"
+    puts "  FPS D Ext:       #{fps_d_ext}"
+
+  when 2
+    puts "  Sequence Display Extension"
+
+    # Good info on interpretation here: http://www.dvmp.co.uk/mod-video-file-format.htm
+
+    has_color_desc = (leading_byte & 1) > 0
+    if has_color_desc
+      ext_data = Bitstream.new($input_file.read2(8))
+    else
+      ext_data = Bitstream.new($input_file.read2(5))
+    end
+    junk = ext_data.getbits(4)
+    video_format = ext_data.getbits(3)
+    color_desc_flag = ext_data.getbits(1)
+    if has_color_desc
+      color_prims = ext_data.getbits(3)
+      transfer_chars = ext_data.getbits(3)
+      matrix_coeffs = ext_data.getbits(3)
+    end
+    display_horiz_size = ext_data.getbits(14)
+    junk = ext_data.getbits(1)
+    display_vert_size = ext_data.getbits(14)
+
+    puts "  Video Format:       #{video_format}"
+    puts "  Color Desc Flag:    #{color_desc_flag}"
+    if has_color_desc
+      puts "  Color Prims:        #{color_prims}"
+      puts "  Transfer Chars:     #{transfer_chars}"
+      puts "  Matrix Coeffs:      #{matrix_coeffs}"
+    end
+    puts "  Display Horiz Size: #{display_horiz_size}"
+    puts "  Display Vert Size:  #{display_vert_size}"
+    
+  when 8
+    puts "  Picture Coding Extension (Not yet decoded...)" # See http://dvd.sourceforge.net/dvdinfo/mpeghdrs.html#ext
+    ext_data = Bitstream.new($input_file.read2(8))
+    
+  else
+    puts "  Unknown extension: #{kind}"
   end
 end
 
@@ -542,10 +661,14 @@ def read_ts_packet
         adaptation_extension = adaptation.getbits(1)
 
         cputs "  Adaptation Extension:"
+        cputs "    Length: #{len_bytes}"
         cputs "    Discontinuous: #{discontinuous}"
         cputs "    Random Access: #{random_access}"
         cputs "    PCR? #{pcr}"
         cputs "    OPCR? #{opcr}"
+        cputs "    splicing_point: #{splicing_point}"
+        cputs "    private_data: #{private_data}"
+        cputs "    adaptation_extension: #{adaptation_extension}"
 
         if pcr == 1
           pcr_base = adaptation.getbits(33)
@@ -560,7 +683,7 @@ def read_ts_packet
           cputs "    OPCR: #{opcr_base},#{opcr_pad},#{opcr_ext}"
         end
       end
-    
+
       if payload_present
         byte_count = (packet.remaining_bits / 8)
         cputs "  Adding #{byte_count} bytes to PS stream."
@@ -603,6 +726,8 @@ def decode_ps_stream(stream)
       decode_picture_header
     when 0xB3
       decode_sequence_header
+    when 0xB5
+      decode_extension
     when 0xB8
       decode_gop
     when 0xBA
@@ -647,13 +772,17 @@ if format == :ts
   $ps_data = StringIO.new('')
   while !$input_file.eof?
     read_ts_packet
-    while start_code = $ps_data.find_next_start_code
-      if STREAM_TYPES[start_code[3]]
-        cputs "Found Start Code: 0x00000#{start_code.unpack('N').first.to_s(16)} = #{STREAM_TYPES[start_code[3]]}", :yellow
-      else
-        cputs "Unknown Start Code: 0x00000#{start_code.unpack('N').first.to_s(16)}", :red
+    begin
+      while start_code = $ps_data.find_next_start_code
+        if STREAM_TYPES[start_code[3]]
+          cputs "Found Start Code: 0x00000#{start_code.unpack('N').first.to_s(16)} = #{STREAM_TYPES[start_code[3]]}", :yellow
+        else
+          cputs "Unknown Start Code: 0x00000#{start_code.unpack('N').first.to_s(16)}", :red
+        end
+        puts
       end
-      puts
+    rescue
+      nil
     end
   end
 else
@@ -663,6 +792,8 @@ else
       decode_picture_header
     when 0xB3
       decode_sequence_header
+    when 0xB5
+      decode_extension
     when 0xB8
       decode_gop
     when 0xBA
