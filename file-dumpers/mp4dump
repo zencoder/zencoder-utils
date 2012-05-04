@@ -229,6 +229,23 @@ class MvhdBox < Box
   end
 end
 
+class MfhdBox < Box
+  handles 'mfhd', 'Movie Fragment Header'
+
+  attr_accessor :sequence_number
+
+  def read_data(stream)
+    version = stream.ui8
+    flags = stream.ui24
+    @sequence_number = stream.ui32
+  end
+
+  def print_extra_info(prefix = '')
+    print prefix
+    cputs "Sequence Number: #{@sequence_number}", :dark_gray
+  end
+end
+
 class TkhdBox < Box
   handles 'tkhd', 'Track Header'
 
@@ -281,6 +298,106 @@ class TkhdBox < Box
     cputs "Layer: #{@layer}", :dark_gray
     print prefix
     cputs "Volume: #{@volume}", :dark_gray
+  end
+end
+
+class TfhdBox < Box
+  handles 'tfhd', 'Track Fragment Header'
+
+  attr_accessor :flags, :track_id, :duration, :layer, :volume, :width, :height
+
+  def read_data(stream)
+    version = stream.ui8
+    @flags = stream.ui24
+    @base_data_offset_present = @flags & 0x01
+    @sample_desc_index_present = @flags & 0x02
+    @default_sample_duration_present = @flags & 0x08
+    @default_sample_size_present = @flags & 0x10
+    @default_sample_flags_present = @flags & 0x20
+    @duration_is_empty = @flags & 0x010000
+
+    @track_id = stream.ui32
+    @base_data_offset = stream.ui64 if @base_data_offset_present > 0
+    @sample_desc_index = stream.ui32 if @sample_desc_index_present > 0
+    @default_sample_duration = stream.ui32 if @default_sample_duration_present > 0
+    @default_sample_size = stream.ui32 if @default_sample_size_present > 0
+    @default_sample_flags = stream.ui32 if @default_sample_flags_present > 0
+  end
+
+  def print_extra_info(prefix = '')
+    print prefix
+    cputs "Track ID: #{@track_id}", :dark_gray
+    if @base_data_offset_present > 0
+      print prefix
+      cputs "Base Data Offset: #{@base_data_offset}", :dark_gray
+    end
+    if @sample_desc_index_present > 0
+      print prefix
+      cputs "Sample Description Index: #{@sample_desc_index}", :dark_gray
+    end
+    if @default_sample_duration_present > 0
+      print prefix
+      cputs "Default Sample Duration: #{@default_sample_duration}", :dark_gray
+    end
+    if @default_sample_size_present > 0
+      print prefix
+      cputs "Default Sample Size: #{@default_sample_size}", :dark_gray
+    end
+    if @default_sample_flags_present > 0
+      print prefix
+      cputs "Default Sample Flags: #{@default_sample_flags}", :dark_gray
+    end
+    print prefix
+    cputs "Duration is Empty?: #{@duration_is_empty > 0 ? 'Yes' : 'No'}", :dark_gray
+  end
+end
+
+class TrunBox < Box
+  handles 'trun', 'Track Fragment Run Box'
+
+  attr_accessor :flags, :data_offset, :first_sample_flags, :entry_count, :entries
+
+  def read_data(stream)
+    version = stream.ui8
+    @flags = stream.ui24
+    
+    @data_offset_present = @flags & 0x01
+    @first_sample_flags_present = @flags & 0x04
+    @sample_duration_present = @flags & 0x0100
+    @sample_size_present = @flags & 0x0200
+    @sample_flags_present = @flags & 0x0400
+    @sample_composition_time_offsets_present = @flags & 0x0800
+    @duration_is_empty = @flags & 0x010000
+
+    @entry_count = stream.ui32
+    @data_offset = stream.si32 if @data_offset_present > 0
+    @first_sample_flags = stream.ui32 if @first_sample_flags_present > 0
+    
+    @entries = []
+    @entry_count.times do
+      entry = {}
+      entry[:duration] = stream.ui32 if @sample_duration_present > 0
+      entry[:size] = stream.ui32 if @sample_size_present > 0
+      entry[:flags] = stream.ui32 if @sample_flags_present > 0
+      entry[:composition_time_offset] = stream.si32 if @sample_composition_time_offsets_present > 0
+      @entries << entry
+    end
+  end
+
+  def print_extra_info(prefix = '')
+    if @data_offset_present > 0
+      print prefix
+      cputs "Data Offset: #{@data_offset}", :dark_gray
+    end
+    print prefix
+    cputs "Sample Count: #{@entry_count}", :dark_gray
+
+    if $VERBOSE
+      @entries.each do |entry|
+        print prefix
+        cputs "Entry Info: #{entry.inspect}", :dark_gray
+      end
+    end
   end
 end
 
@@ -587,6 +704,60 @@ class CttsBox < Box
 
 end
 
+class SdtpBox < Box
+  handles 'sdtp', 'Sample Dependency Box'
+
+  attr_accessor :version, :flags, :entry_count, :entries
+
+  def initialize(*args)
+    @version = nil
+    @flags = nil
+    @sample_count = nil
+    @entries = []
+    @entry_count = nil
+    super
+  end
+
+  def read_data(stream)
+    @version,@flags = stream.ui8, stream.ui24
+    @entry_count = lookup_sample_count rescue -1
+    return unless @entry_count >= 0
+    @entry_count.times do
+      flags = stream.ui8
+      @entries << {
+        :depends_on => (flags & 0b00110000) >> 4,
+        :depended_on => (flags & 0b00001100) >> 2,
+        :redundancy => (flags & 0b00000011),
+      }
+    end
+  end
+
+  def print_extra_info(prefix = '')
+    value_names = ['Unknown','Yes','No','Invalid/Reserved']
+    print prefix
+    if @entry_count == -1
+      cputs "File order didn't allow inline decoding...", :red
+    else
+      cputs "Entry Count: #{@entry_count}", :dark_gray
+    end
+    if $VERBOSE
+      @entries.each do |entry|
+        print prefix
+        cputs "Depends On Others: #{value_names[entry[:depends_on]]}, Depended On By Others: #{value_names[entry[:depended_on]]}, Has Redundancy: #{value_names[entry[:redundancy]]}", :dark_gray
+      end
+    end
+  end
+
+  def lookup_sample_count
+    return @sample_count if @sample_count
+    temp_parent = find_parent('stbl') || find_parent('traf') #rescue nil
+    raise "No parent for sdtp found -- unknown sample count." unless parent
+    count_child = parent.first_child('stsz') || parent.first_child('trun')
+    raise "No stsz or trun found matching sdtp -- unknown sample count." unless count_child
+    @sample_count = count_child.entry_count
+  end
+end
+
 class StscBox < Box
   handles 'stsc', 'Sample to Chunk'
 
@@ -641,6 +812,43 @@ class StcoBox < Box
     @version,@flags,@entry_count = stream.ui8, stream.ui24, stream.ui32
     @entry_count.times do |i|
       @entries << stream.ui32
+    end
+  end
+
+  def print_extra_info(prefix = '')
+    if @entry_count != @entries.length
+      print prefix
+      cputs "Entry count doesn't match number of entries found!", :red
+    end
+    print prefix
+    cputs "Entry Count: #{@entry_count}", :dark_gray
+    if $VERBOSE2
+      @entries.each do |entry|
+        print prefix
+        cputs "Chunk Offset: #{entry}", :dark_gray
+      end
+    end
+  end
+
+end
+
+class Co64Box < Box
+  handles 'co64', '64-bit Chunk Offset Table'
+
+  attr_accessor :version, :flags, :entry_count, :entries
+
+  def initialize(*args)
+    @version = nil
+    @flags = nil
+    @entry_count = 0
+    @entries = []
+    super
+  end
+
+  def read_data(stream)
+    @version,@flags,@entry_count = stream.ui8, stream.ui24, stream.ui32
+    @entry_count.times do |i|
+      @entries << stream.ui64
     end
   end
 
