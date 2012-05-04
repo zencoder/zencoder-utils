@@ -1,7 +1,21 @@
 #/usr/bin/env ruby
 
-hour_count = (ARGV.shift || 6).to_i
-point_count = (ARGV.shift || 1440).to_i
+# Clear out any environment options.
+if ARGV.first == '-e'
+  ARGV.shift(2)
+end
+
+def numeric_arg_with_default(default_value)
+  value = ARGV.shift
+  if value =~ /\d/
+    value.to_f
+  else
+    default_value
+  end
+end
+
+hour_count = numeric_arg_with_default(6)
+point_count = numeric_arg_with_default(1440)
 
 TIME_OFFSET = -7.hours
 CLOUD_ID = 1
@@ -11,7 +25,7 @@ EXCLUDE_LOW_PRIORITY = true
 
 DURATION = hour_count.hours
 START_TIME = Time.now - DURATION
-# START_TIME = Time.gm(2011,8,22,8,30,0)
+# START_TIME = Time.gm(2012,5,2,13,30,0)
 DATA_POINTS = point_count
 # DATA_POINTS = 6.hours / 15.seconds
 
