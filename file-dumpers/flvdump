@@ -251,7 +251,7 @@ while more_to_read
   
   puts "  Type: #{kind} (#{kind_name})"
   puts "  Size: #{size}"
-  puts "  Time: #{timestamp_ext*(2**24) + timestamp / 1000.0}"
+  puts "  Time: #{(timestamp_ext*(2**24) + timestamp) / 1000.0}"
   puts "  Stream ID: #{stream_id}"
 
   next if size == 0
