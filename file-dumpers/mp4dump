@@ -1029,9 +1029,9 @@ class ElstBox < Box
     @version,@flags,@entry_count = stream.ui8, stream.ui24, stream.ui32
     @entry_count.times do |i|
       if @version == 1
-        @entries << { :duration => stream.ui64, :media_time => stream.ui64, :media_rate => stream.fixed32 }
+        @entries << { :duration => stream.ui64, :media_time => stream.si64, :media_rate => stream.fixed32 }
       else
-        @entries << { :duration => stream.ui32, :media_time => stream.ui32, :media_rate => stream.fixed32 }
+        @entries << { :duration => stream.ui32, :media_time => stream.si32, :media_rate => stream.fixed32 }
       end
     end
   end
