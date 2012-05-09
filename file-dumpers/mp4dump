@@ -565,15 +565,74 @@ class SubBoxWithSubBoxes < SubBox
     @data = stream.read(@data_size)
     @data_stream = StringIO.new(@data)
 
-    read_header_data(@data_stream) if @data
+    @content_is_tags = true if @data_size >= 3 && @data[0,3] == [0x03,0x80,0x80].pack('C*')
 
-    while (@data_stream.pos + 1) < (@data_stream.length) && (box = SubBox.read(@data_stream, :parent => self))
-      @children << box
+    if @content_is_tags
+      parse_tags
+    else
+      read_header_data(@data_stream) if @data
+
+      while (@data_stream.pos + 1) < (@data_stream.length) && (box = SubBox.read(@data_stream, :parent => self))
+        @children << box
+      end
     end
+  end
+
+  def print_extra_info(prefix = '')
+    return unless @content_is_tags
+    print prefix
+    cputs "Audio Type: #{@audio_type}", :dark_gray
+    print prefix
+    cputs "Bitrate: #{@bitrate}", :dark_gray
+    print prefix
+    cputs "Max Bitrate: #{@max_bitrate}", :dark_gray
   end
 
   def read_header_data(stream)
     # No default header data.
+  end
+
+  def parse_tags(data_size = @data_size)
+    while @data_stream.pos < data_size
+      kind = @data_stream.ui8
+      len = read_desc_length
+
+      return if len == 0
+
+      case kind
+      when 3 # es_descr_tag -- has subitems.
+        # 3 bytes are esid and stream priority
+        @data_stream.read(3)
+        parse_tags(len - 3)
+      when 4 # decoder_config_descr_tag -- the one we want.
+        @audio_type = @data_stream.ui8
+        @data_stream.ui32 # Unknown
+        @max_bitrate = @data_stream.ui32
+        @bitrate = @data_stream.ui32
+        if len > 8
+          @data_stream.read(len - 8)
+        end
+      when 5 # dec_specific_info_tag -- not useful
+        @data_stream.read(len)
+      when 6 # sl_config_descr_tag -- not useful
+        @data_stream.read(len)
+      else # who knows
+        @data_stream.read(len)
+      end
+
+    end
+  end
+
+  def read_desc_length
+    length = 0
+    4.times do
+      b = @data_stream.ui8
+      length = (length << 7) + (b & 127)
+      return length if b < 128
+    end
+    return length
+  rescue
+    0
   end
 end
 
@@ -995,6 +1054,7 @@ end
 class Mp4aSubBox < SubBoxWithSubBoxes
   handles 'mp4a', 'MP4 Audio Description'
   handles 'sowt', 'SOWT Audio Description'
+  handles 'aace', 'AACE Audio Description'
 
   attr_accessor :channels, :sample_size, :sample_rate
 
