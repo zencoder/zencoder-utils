@@ -360,7 +360,7 @@ class TrunBox < Box
   def read_data(stream)
     version = stream.ui8
     @flags = stream.ui24
-    
+
     @data_offset_present = @flags & 0x01
     @first_sample_flags_present = @flags & 0x04
     @sample_duration_present = @flags & 0x0100
@@ -372,7 +372,7 @@ class TrunBox < Box
     @entry_count = stream.ui32
     @data_offset = stream.si32 if @data_offset_present > 0
     @first_sample_flags = stream.ui32 if @first_sample_flags_present > 0
-    
+
     @entries = []
     @entry_count.times do
       entry = {}
