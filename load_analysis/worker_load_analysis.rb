@@ -22,6 +22,7 @@ CLOUD_ID = 1
 ACCOUNT_ID = :all
 # ACCOUNT_ID = 2370
 EXCLUDE_LOW_PRIORITY = true
+EXCLUDE_TEST_JOBS = true
 
 DURATION = hour_count.hours
 START_TIME = Time.now - DURATION
@@ -77,11 +78,19 @@ puts "Querying database for data..."
 
 @workers = @cloud.workers.find(:all, :select => 'id,worker_type_id,state,created_at,alive_at,killed_at,updated_at,url,instance_id', :conditions => ["(killed_at >= ? OR (killed_at is null AND updated_at >= ?)) AND created_at < ?", @start_time, @start_time, @end_time])
 if ACCOUNT_ID != :all
+  raise "Not yet optimized."
   @inputs = @cloud.input_media_files.find(:all, :select => 'id,account_id,job_id,state,created_at,started_at,finished_at,times,low_priority', :conditions => ["(finished_at is null or finished_at >= ?) and created_at < ? and state != 'cancelled' and account_id = ?", @start_time, @end_time, ACCOUNT_ID])
   @outputs = @cloud.output_media_files.find(:all, :select => 'id,account_id,job_id,state,created_at,started_at,updated_at,finished_at,times,low_priority,cached_queue_time,cached_total_time,estimated_transcode_load', :conditions => ["(finished_at is null or finished_at >= ?) and created_at < ? and state != 'cancelled' and account_id = ?", @start_time, @end_time, ACCOUNT_ID])
 else
-  @inputs = @cloud.input_media_files.find(:all, :select => 'id,account_id,job_id,state,created_at,started_at,finished_at,times,low_priority', :conditions => ["(finished_at is null or finished_at >= ?) and created_at < ? and state != 'cancelled'", @start_time, @end_time])
-  @outputs = @cloud.output_media_files.find(:all, :select => 'id,account_id,job_id,state,created_at,started_at,updated_at,finished_at,times,low_priority,cached_queue_time,cached_total_time,estimated_transcode_load', :conditions => ["(finished_at is null or finished_at >= ?) and created_at < ? and state != 'cancelled'", @start_time, @end_time])
+  running_inputs =  @cloud.input_media_files.find(:all, :select => 'id,account_id,job_id,state,created_at,started_at,finished_at,times,low_priority', :conditions => ["finished_at is null and created_at < ? and state != 'cancelled'", @end_time])
+  finished_inputs = @cloud.input_media_files.find(:all, :select => 'id,account_id,job_id,state,created_at,started_at,finished_at,times,low_priority', :conditions => ["finished_at >= ? and finished_at <= ? and created_at < ? and state != 'cancelled'", @start_time, @end_time + 3.hours, @end_time])
+  running_inputs.delete_if { |r| finished_inputs.detect { |f| f.id == r.id } }
+  @inputs = running_inputs + finished_inputs
+
+  running_outputs =  @cloud.output_media_files.find(:all, :select => 'id,account_id,job_id,state,created_at,started_at,updated_at,finished_at,times,low_priority,cached_queue_time,cached_total_time,estimated_transcode_load', :conditions => ["finished_at is null and created_at < ? and state = 'processing'", @end_time])
+  finished_outputs = @cloud.output_media_files.find(:all, :select => 'id,account_id,job_id,state,created_at,started_at,updated_at,finished_at,times,low_priority,cached_queue_time,cached_total_time,estimated_transcode_load', :conditions => ["finished_at >= ? and finished_at <= ? and created_at < ? and state != 'cancelled'", @start_time, @end_time + 3.hours, @end_time])
+  running_outputs.delete_if { |r| finished_outputs.detect { |f| f.id == r.id } }
+  @outputs = running_outputs + finished_outputs
 end
 
 puts "Queries finished."
@@ -95,7 +104,7 @@ puts "Queries finished."
   next unless worker.killed_at || ['launching','active','terminating','updating','disappeared'].include?(worker.state)
 
   input_capacity = @worker_types[worker.worker_type_id].max_downloads || 6
-  output_capacity = @worker_types[worker.worker_type_id].max_load || 900
+  output_capacity = @worker_types[worker.worker_type_id].target_load || 900
 
   created = worker.created_at.to_i
   updated = worker.updated_at.to_i
@@ -128,6 +137,7 @@ puts "Loaded worker data..."
 @inputs.each do |input|
   next unless input.finished_at || ['waiting','processing'].include?(input.state)
   next if EXCLUDE_LOW_PRIORITY && input.low_priority
+  next if EXCLUDE_TEST_JOBS && input.test?
 
   @input_time_data << { :type => :queued, :time => input.created_at.to_i }
   @input_time_data << { :type => :started, :time => (input.started_at || Time.now + 1.year).to_i}
@@ -144,6 +154,7 @@ puts "Loaded input data..."
   next if output.state == 'no_input'
   next unless output.finished_at || ['ready','processing'].include?(output.state)
   next if EXCLUDE_LOW_PRIORITY && output.low_priority
+  next if EXCLUDE_TEST_JOBS && output.test?
 
   # Will figure this out later too.
   next if output.state == 'failed'
