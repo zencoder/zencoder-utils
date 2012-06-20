@@ -1,0 +1,454 @@
+#!/usr/bin/env ruby
+
+#
+# caf2m4a - Convert CAF file to m4a file
+#
+
+$:.unshift(File.dirname(__FILE__))
+require 'dump_helpers'
+require 'zlib'
+
+
+class BoxFile
+  attr_accessor :boxes
+
+  def initialize(data_stream, base_offset = 0)
+    @data = data_stream
+    @boxes = []
+  end
+
+  def parse
+    file_type = @data.fourcc
+    raise "Not a CAF file!" unless file_type == 'caff'
+    file_version = @data.ui16
+    file_flags = @data.ui16
+
+    while (box = Box.read(@data, :file => self))
+      boxes << box
+      break if box.size == 0 # Zero size means it extends to the end of the file.
+    end
+    self
+  end
+
+  def print_tree
+    puts
+    @boxes.each { |box| box.print_tree }
+    if @boxes.length == 0
+      puts "Empty Tree!"
+    end
+    puts
+  end
+
+  def first_box(box_kind)
+    @boxes.detect { |b| b.kind == box_kind }
+  end
+end
+
+class Box
+  attr_accessor :base_offset, :kind, :size, :data_size
+  attr_accessor :data_offset, :data, :data_stream, :parent, :children, :file
+
+  # Register each box kind with what handles it.
+  HANDLERS = {}
+  DESCRIPTIONS = {}
+  def self.handles(kind, description = nil)
+    Box::HANDLERS[kind] = self
+    Box::DESCRIPTIONS[kind] = description
+  end
+
+  def self.initial_fields
+    @initial_fields ||= []
+  end
+
+  def initial_fields
+    self.class.initial_fields
+  end
+
+  # Shortcut to add a new initial field.
+  def self.field(name, format, options = {})
+    initial_fields << { :name => name, :format => format, :options => options }
+    attr_accessor name
+  end
+
+  def self.read(stream, options = {})
+    kind,size = stream.fourcc,stream.ui64 rescue nil
+    return nil if size.nil?
+    handler = Box::HANDLERS[kind] || Box
+    handler.new(stream, kind, size, options)
+  end
+
+  def initialize(stream, kind, size, options = {})
+    header_size = 12
+    @data_offset = stream.pos
+    @base_offset = @data_offset - header_size
+    @kind = kind
+    @size = size + header_size
+    @data_size = size
+    @data = nil
+    @children = []
+    @parent = options[:parent]
+    @file = options[:file]
+    read_data(stream)
+
+    # Make sure to read in any trailing junk data.
+    if stream.pos < @base_offset + @size
+      stream.seek(@base_offset + @size)
+    end
+  end
+
+  def read_data(stream)
+    initial_fields.each do |field|
+      send(field[:name].to_s + '=', stream.send(field[:format]))
+    end
+  end
+
+  def description
+    Box::DESCRIPTIONS[@kind]
+  end
+
+  def self.extended_description
+    @extended_description ||= nil
+  end
+
+  def print_tree(prefix = '')
+    color = :cyan
+    if @children.length > 0
+      color = :yellow
+    elsif @parent.nil?
+      color = :green
+    end
+    print prefix
+    cprint @kind, color
+    cprint(" - " + description, color) if description
+    cprint(" (#{self.class.extended_description})", color) if self.class.extended_description
+    puts " at #{@base_offset} (#{@size} bytes)"
+    print_extra_info(prefix + '|   ')
+    @children.each { |box| box.print_tree(prefix + '|   ') }
+  end
+
+  def print_extra_info(prefix = '')
+    initial_fields.each do |field|
+      if field[:options][:desc] || ($VERBOSE && !field[:options][:hide])
+        print prefix
+        cputs "#{field[:options][:desc] || field[:name].inspect}: #{send(field[:name])}", :dark_gray
+      end
+    end
+  end
+
+  def find_parent(parent_kind)
+    return self if @kind == parent_kind
+    return nil if @parent.nil?
+    return @parent.find_parent(parent_kind)
+  end
+
+  def first_child(child_kind)
+    @children.detect { |c| c.kind == child_kind }
+  end
+end
+
+
+class DescBox < Box
+  handles 'desc', 'Audio Description'
+
+  field :sample_rate, :f64, :desc => 'Sample Rate'
+  field :format_id, :fourcc, :desc => 'Format ID'
+  field :format_flags, :ui32, :desc => 'Format Flags'
+  field :bytes_per_packet, :ui32, :desc => 'Bytes per Packet'
+  field :frames_per_packet, :ui32, :desc => 'Frames per Packet'
+  field :channels_per_frame, :ui32, :desc => 'Channels per Frame'
+  field :bits_per_channel, :ui32, :desc => 'Bits per Channel'
+end
+
+class PacketTable < Box
+  handles 'pakt', 'Packet Table'
+
+  field :number_packets,      :si64, :desc => 'Number of Packets'
+  field :number_valid_frames, :si64, :desc => 'Number of Valid Frames'
+  field :priming_frames,      :si32, :desc => 'Priming Frames'
+  field :remainder_frames,    :si32, :desc => 'Remainder Frames'
+
+  attr_accessor :entries
+
+  def read_data(stream)
+    super
+    @entries = []
+    desc = @file.first_box('desc') rescue nil
+    if desc
+      bpp = desc.bytes_per_packet
+      fpp = desc.frames_per_packet
+      bpp = nil if bpp == 0
+      fpp = nil if fpp == 0
+      @number_packets.times do
+        entry = {}
+        entry[:bytes] = bpp || stream.var_i
+        entry[:frames] = fpp || stream.var_i
+        @entries << entry
+      end
+    end
+  end
+  
+  def print_extra_info(prefix = '')
+    super
+
+    if @number_packets != @entries.length
+      print prefix
+      cputs "Packet count doesn't match number of packets found!", :red
+    end
+    if $VERBOSE2
+      @entries.each do |entry|
+        print prefix
+        cputs "Bytes: #{entry[:bytes]}, Frames: #{entry[:frames]}", :dark_gray
+      end
+    end
+  end
+end
+
+class KukiBox < Box
+  handles 'kuki', 'Magic Cookie'
+
+  # If it makes a base KukiBox, then it's an unknown type.
+  @extended_description = 'unknown'
+
+  def file_format
+    @file_format ||= @file.first_box('desc').format_id rescue nil
+  end
+
+  class << self
+    def new(stream, kind, size, options = {})
+      file_format = options[:file].first_box('desc').format_id rescue nil
+      case file_format
+      when 'alac'
+        return AlacKukiBox.new(stream, kind, size, options)
+      end
+      super
+    end
+  end
+
+end
+
+class AlacKukiBox < Box
+  @extended_description = "alac"
+  field :frame_length, :ui32
+  field :compatible_version, :ui8
+  field :bit_depth, :ui8, :desc => "Bit Depth"
+  field :pb, :ui8
+  field :mb, :ui8
+  field :kb, :ui8
+  field :channels, :ui8, :desc => "Channels"
+  field :max_run, :ui16
+  field :max_frame_bytes, :ui32
+  field :average_bitrate, :ui32, :desc => "Average Bitrate"
+  field :sample_rate, :ui32, :desc => "Sample Rate"
+  
+  def read_data(stream)
+    # Cache the cookie data.
+    cur_pos = stream.pos
+    @data = stream.read(@data_size)
+    stream.seek(cur_pos, IO::SEEK_SET)
+
+    super
+  end
+end
+
+class DataBox < Box
+  handles 'data', 'Audio Data'
+
+  field :edit_count, :ui32, :desc => 'Edit Count'
+end
+
+#################################################################################
+
+def make_chunk(name, data)
+  [data.length + 8,name,data].pack('Na*a*')
+end
+
+def mvhd_data(caf)
+  desc = caf.first_box('desc')
+  pakt = caf.first_box('pakt')
+
+  [
+    "\x00" * (4 + 8), # version, flags, ctime, mtime
+    [desc.sample_rate].pack('N'), # timescale
+    [pakt.number_valid_frames].pack('N'), # duration
+    [1, 0].pack('nn'), # play_rate
+    [1, 0].pack('CC'), # volume
+    "\x00" * 10, # reserved
+    (("\x00\x01\x00\x00" + ("\x00\x00\x00\x00"*3)) * 2) + "\x40\x00\x00\x00", # matrix
+    [0, 0, 0, 0, 0, 0].pack('N6'), # quicktime junk
+    [2].pack('N') # next track id
+  ].join
+end
+
+def tkhd_data(caf)
+  desc = caf.first_box('desc')
+  pakt = caf.first_box('pakt')
+
+  [
+    "\x00", # version
+    "\x00\x00\x07", # flags
+    "\x00" * 8, # ctime, mtime
+    [1].pack('N'), # track id
+    "\x00" * 4, # reserved,
+    [pakt.number_valid_frames].pack('N'), # duration
+    "\x00" * 12, # reserved, layer, alt group
+    [1, 0].pack('CC'), # volume
+    "\x00" * 2, # reserved
+    (("\x00\x01\x00\x00" + ("\x00\x00\x00\x00"*3)) * 2) + "\x40\x00\x00\x00", # matrix
+    "\x00" * 8, # width, height
+  ].join
+end
+
+def mdhd_data(caf)
+  desc = caf.first_box('desc')
+  pakt = caf.first_box('pakt')
+  kuki = caf.first_box('kuki')
+
+  [
+    "\x00", # version
+    "\x00" * (3 + 8), # flags, ctime, mtime
+    [kuki.sample_rate].pack('N'), # timescale
+    [pakt.number_valid_frames].pack('N'), # duration
+    "\x00" * 4 # language bits, and reserved
+  ].join
+end
+
+def stsd_data(caf)
+  desc = caf.first_box('desc')
+  pakt = caf.first_box('pakt')
+  kuki = caf.first_box('kuki')
+  
+  audio_config_data = [
+    [0,0,1,0,0,0].pack('NnnnnN'),
+    [kuki.channels, kuki.bit_depth].pack('nn'),
+    [0,0].pack('nn'),
+    [kuki.sample_rate, 0].pack('nn') # fixed32 sample rate
+  ].join
+
+  [
+    [0, 1].pack('NN'), # version, flags, entry count
+    make_chunk('alac',
+      audio_config_data +
+      make_chunk('alac', ("\x00"*4) + kuki.data.to_s)
+    )
+  ].join
+end
+
+def stts_data(caf)
+  desc = caf.first_box('desc')
+  pakt = caf.first_box('pakt')
+  
+  if pakt.remainder_frames > 0
+    [
+      [0, 2].pack('NN'), # version, flags, entry count
+      [pakt.number_packets - 1, 4096].pack('NN'),
+      [1, 4096 - pakt.remainder_frames].pack('NN'),
+    ].join
+  else
+    [
+      [0, 1].pack('NN'), # version, flags, entry count
+      [pakt.number_packets, 4096].pack('NN')
+    ].join
+  end
+end
+
+def stsz_data(caf)
+  desc = caf.first_box('desc')
+  pakt = caf.first_box('pakt')
+
+  initial_data = [0, 0, pakt.number_packets].pack('NNN') # version, flags, default size, entry count
+  
+  initial_data + (pakt.entries.map { |e| e[:bytes] }).pack('N*')
+end
+
+def stco_data(caf, offset)
+  desc = caf.first_box('desc')
+  pakt = caf.first_box('pakt')
+
+  initial_data = [0, pakt.number_packets].pack('NN') # version, flags, entry count
+  
+  current_offset = offset
+  initial_data + (pakt.entries.map { |e| o = current_offset; current_offset += e[:bytes]; o }).pack('N*')
+end
+
+#################################################################################
+
+# rainbow
+
+$VERBOSE = false
+$VERBOSE2 = false
+$FORCE_OVERWRITE = false
+$DEBUG = false
+
+while ['-v','-vv','-nc','-f'].include?(ARGV.first)
+  arg = ARGV.shift
+  case arg
+  when '-v'
+    $VERBOSE = true
+  when '-vv'
+    $VERBOSE = true
+    $VERBOSE2 = true
+  when '-f'
+    $FORCE_OVERWRITE = true
+  end
+end
+
+error "Usage: caf2m4a <caf_file> <m4a_file>" unless ARGV.length == 2
+
+input_filename = ARGV.first
+output_filename = ARGV.last
+
+error "Input file not found." unless File.exist?(input_filename)
+error "Output file already exists." if (File.exist?(output_filename) && !$FORCE_OVERWRITE)
+
+file_size = File.size(input_filename)
+input_file = File.open(input_filename)
+
+caf = BoxFile.new(input_file)
+caf.parse
+
+m4a = File.new(output_filename, 'w')
+m4a.write make_chunk('ftyp',"M4A \x00\x00\x00\x00M4A mp42isom")
+
+caf_data = caf.first_box('data')
+caf_data_offset = caf_data.data_offset + 4
+bytes_to_copy = caf_data.data_size - 4
+m4a_data_offset = 36 # ftyp atom and mdat header make 36 bytes
+
+m4a.write [bytes_to_copy + 8, 'mdat'].pack('Na*')
+input_file.seek(caf_data_offset, IO::SEEK_SET)
+bytes_copied = 0
+while bytes_copied < bytes_to_copy && !input_file.eof
+  bytes = input_file.read([16384, (bytes_to_copy-bytes_copied)].min)
+  m4a.write(bytes)
+  bytes_copied += bytes.length
+end
+
+error "ERROR: CAF data smaller than expected!" if bytes_copied < bytes_to_copy
+
+m4a.write make_chunk('moov',
+  make_chunk('mvhd', mvhd_data(caf)) +
+  make_chunk('trak',
+    make_chunk('tkhd', tkhd_data(caf)) +
+    make_chunk('mdia',
+      make_chunk('mdhd', mdhd_data(caf)) +
+      make_chunk('hdlr', ("\x00"*8) + 'soun' + ("\x00"*14) ) +
+      make_chunk('minf',
+        make_chunk('smhd', "\x00"*8) +
+        make_chunk('dinf',
+          make_chunk('dref', "\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00\x00\x0C\x75\x72\x6C\x20\x00\x00\x00\x01")
+        ) +
+        make_chunk('stbl',
+          make_chunk('stsd', stsd_data(caf)) +
+          make_chunk('stts', stts_data(caf)) +
+          make_chunk('stsc', [0,1,1,1,1].pack('N5')) +
+          make_chunk('stsz', stsz_data(caf)) +
+          make_chunk('stco', stco_data(caf, m4a_data_offset))
+        )
+      )
+    )
+  )
+)
+
+m4a.close
+
+

@@ -565,7 +565,7 @@ class SubBoxWithSubBoxes < SubBox
     @data = stream.read(@data_size)
     @data_stream = StringIO.new(@data)
 
-    @content_is_tags = true if @data_size >= 3 && @data[0,3] == [0x03,0x80,0x80].pack('C*')
+    @content_is_tags = (@data_size >= 3 && @data[0,3] == [0x03,0x80,0x80].pack('C*'))
 
     if @content_is_tags
       parse_tags
@@ -724,6 +724,42 @@ class SttsBox < Box
     end
   end
 
+end
+
+class CslgBox < Box
+  handles 'cslg', 'Composition Shift Info'
+
+  attr_accessor :version, :flags
+
+  def initialize(*args)
+    @version = nil
+    @flags = nil
+    @shift = nil
+    @least_delta = nil
+    @greatest_delta = nil
+    @display_start_time = nil
+    @display_end_time = nil
+    super
+  end
+
+  def read_data(stream)
+    @version,@flags = stream.ui8, stream.ui24
+    @shift, @least_delta, @greatest_delta = stream.si32, stream.si32, stream.si32
+    @display_start_time, @display_end_time = stream.ui32, stream.ui32
+  end
+
+  def print_extra_info(prefix = '')
+    print prefix
+    cputs "Shift: #{@shift}", :dark_gray
+    print prefix
+    cputs "Least Delta: #{@least_delta}", :dark_gray
+    print prefix
+    cputs "Greatest Delta: #{@greatest_delta}", :dark_gray
+    print prefix
+    cputs "Display Start Time: #{@display_start_time}", :dark_gray
+    print prefix
+    cputs "Display End Time: #{@display_end_time}", :dark_gray
+  end
 end
 
 class CttsBox < Box
