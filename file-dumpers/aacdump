@@ -21,10 +21,11 @@ class IO
 end
 
 class Bitstream
-  attr_accessor :bit_offset
+  attr_accessor :bit_offset, :total_bits
   
   def initialize(data_string, starting_byte_offset = 0)
     @data = data_string
+    @total_bits = @data.length * 8
     @bit_offset = 0
     @pos = starting_byte_offset
   end
@@ -60,21 +61,24 @@ class Bitstream
   
   def append(data_string)
     @data << data_string
+    @total_bits += data_string.length
   end
   
   # Remove any data that we've moved past already, so we don't build up too much in memory.
   def pop
     byte = @bit_offset / 8
     bit = @bit_offset % 8
-    
+
     @pos += byte
     @bit_offset = bit
-    
+
     if @pos > 0
       @data = @data[@pos..-1]
       @pos = 0
     end
-    
+
+    @total_bits = @data.length * 8
+
     true
   end
 end
@@ -108,14 +112,14 @@ end
 
 mpeg2_profiles = {
   0 => "Main",
-  2 => "Low Complexity",
+  1 => "Low Complexity",
   2 => "Scalable Sample Rate",
   3 => "<reserved>",
 }
 
 mpeg4_profiles = {
   0 => "Main",
-  2 => "AAC-LC",
+  1 => "AAC-LC",
   2 => "AAC Scalable Sample Rate",
   3 => "AAC LTP",
 }
@@ -149,6 +153,103 @@ aac_channel_configs = {
   6 => "6 channels: front-center, front-left, front-right, back-left, back-right, LFE-channel",
   7 => "8 channels: front-center, front-left, front-right, side-left, side-right, back-left, back-right, LFE-channel",
 }
+
+ONLY_LONG_SEQUENCE = 0
+LONG_START_SEQUENCE = 1
+EIGHT_SHORT_SEQUENCE = 2
+LONG_STOP_SEQUENCE = 3
+
+PRED_SFB_MAX = {
+  96000 => 33,
+  88200 => 33,
+  64000 => 38,
+  48000 => 40,
+  44100 => 40,
+  32000 => 40,
+  24000 => 41,
+  22050 => 41,
+  16000 => 37,
+  12000 => 37,
+  11025 => 37,
+   8000 => 34
+}
+
+def individual_channel_stream(bitstream, common_window)
+  global_gain = bitstream.getbits(8)
+  if common_window == 0
+    ics_info(bitstream)
+  end
+
+  section_data
+
+  scale_factor_data
+
+  pulse_data_present = bitstream.getbits(1)
+  if pulse_data_present
+    pulse_data
+  end
+
+  tns_data_present = bitstream.getbits(1)
+  if tns_data_present
+    tns_data
+  end
+
+  gain_control_data_present = bitstream.getbits(1)
+  if gain_control_data_present
+    gain_control_data
+  end
+
+  spectral_data
+end
+
+def ics_info(bitstream)
+  ics_reserved_bit = bitstream.getbits(1)
+  window_sequence = bitstream.getbits(2)
+  window_shape = bitstream.getbits(1)
+  if window_sequence == EIGHT_SHORT_SEQUENCE
+    max_sfb = bitstream.getbits(4)
+    scale_factor_grouping = bitstream.getbits(7)
+  else
+    max_sfb = bitstream.getbits(6)
+    predictor_data_present = bitstream.getbits(1)
+    if predictor_data_present == 1
+      predictor_reset = bitstream.getbits(1)
+      if predictor_reset == 1
+        predictor_reset_group_number = bitstream.getbits(5)
+      end
+      prediction_used = []
+      [max_sfb, PRED_SFB_MAX[@sample_rate]].min.times do
+        prediction_used << bitstream.getbits(1)
+      end
+    end
+  end
+end
+
+def read_syntax_element(bitstream)
+  se_id = bitstream.getbits(3)
+  case se_id
+  when ID_SCE:
+    instance_tag = bitstream.getbits(4)
+    individual_channel_stream(bitstream, 0)
+  when ID_CPE:
+    instance_tag = bitstream.getbits(4)
+    common_window = bitstream.getbits(1)
+    if common_window == 1
+      ics_info(bitstream)
+      ms_mask_present = bitstream.getbits(2)
+      if ms_mask_present == 1
+        raise "ms_mask stuff not yet supported"
+      end
+    end
+    individual_channel_stream(bitstream, common_window)
+  when ID_CCE:
+  when ID_LFE:
+  when ID_DSE:
+  when ID_PCE:
+  when ID_FIL:
+    { :id => ID_FIL }
+  end
+end
 
 error "Please specify a file to inspect." unless ARGV.length > 0
 
@@ -198,7 +299,7 @@ while !input_file.eof?
   num_raw_data_blocks_in_frame =   header.getbits(2)
   crc_check =                      header.getbits(16)
 
-  puts "ADTS Header:"
+  puts "ADTS Header: (offset #{input_file.pos - 9})"
   puts "  Error: Invalid syncword!" unless syncword == 0xfff
   if id == 0
     puts "  MPEG-4"
@@ -208,241 +309,57 @@ while !input_file.eof?
     puts "  Profile: #{mpeg2_profiles[profile]}"
   end
   # puts "  Sampling Frequency Index: #{sampling_frequency_index}"
-  puts "  Sample Rate: #{aac_sample_rates[sampling_frequency_index]}"
+  @sample_rate = aac_sample_rates[sampling_frequency_index]
+  puts "  Sample Rate: #{@sample_rate}"
   # puts "  Channel Configuration: #{channel_configuration}"
   puts "  Channels: #{aac_channel_configs[channel_configuration]}"
   puts "  AAC Frame Length: #{aac_frame_length}"
   puts "  ADTS Buffer Fullness: #{adts_buffer_fullness}"
-  puts "  Num blocks in frame: #{num_raw_data_blocks_in_frame}"
+  puts "  Num blocks in frame: #{num_raw_data_blocks_in_frame}+1"
   
-  exit
+  data_length = aac_frame_length - 9 # 9 bytes for the header
+  aac_data = input_file.read(data_length) if data_length > 0
   
-end
+  if aac_data.length == data_length
+    data = Bitstream.new(aac_data)
 
+    if num_raw_data_blocks_in_frame == 0
+      # adts_error_check
+      if protection_absent == 0
+        crc = data.getbits(16)
+      end
 
-
-exit
-
-puts
-puts "HEADER:"
-
-version = input_file.ui8
-puts "Version: #{version}"
-
-flags = input_file.ui8
-puts "Has audio tags: " + ((flags & 0x4 > 0) ? 'yes' : 'no')
-puts "Has video tags: " + ((flags & 0x1 > 0) ? 'yes' : 'no')
-if (flags & 0b11111010) > 0
-  puts "WARNING: reserved flag bits are not zero!"
-end
-
-data_loc = input_file.ui32
-puts "Data offset: #{data_loc}"
-
-puts
-puts "BODY:"
-
-more_to_read = true
-while more_to_read
-
-  prev_tag_size = input_file.ui32
-  
-  if input_file.eof?
-    puts "LASTTAG:"
-    puts "  Prev tag size: #{prev_tag_size}"
-
-    more_to_read = false
-    next
-  end
-
-  puts "TAG: (offset #{input_file.pos})"
-  puts "  Prev tag size: #{prev_tag_size}"
-  
-  kind = input_file.ui8
-  size = input_file.ui24
-  timestamp = input_file.ui24
-  timestamp_ext = input_file.ui8
-  stream_id = input_file.ui24
-  
-  kind_name = tag_kinds[kind] || 'unknown'
-  
-  puts "  Type: #{kind} (#{kind_name})"
-  puts "  Size: #{size}"
-  puts "  Time: #{(timestamp_ext*(2**24) + timestamp) / 1000.0}"
-  puts "  Stream ID: #{stream_id}"
-
-  next if size == 0
-
-  if kind_name == 'audio'
-    format_flags = input_file.ui8
-    format = (format_flags >> 4) & 15
-    rate = (2 ** ((format_flags >> 2) & 3) * 5512.5).round
-    bits = ((format_flags >> 1) & 1) * 8 + 8
-    channels = format_flags & 1 + 1
-    puts "  Audio format: #{format} (#{audio_formats[format] || 'unknown'})"
-    puts "  Audio rate: #{rate}"
-    puts "  Audio bits: #{bits}"
-    puts "  Audio channels: #{channels}"
-    
-    if format == 10
-      packet_type = input_file.ui8
-      puts "  Audio packet type: #{packet_type} (#{packet_type == 0 ? 'sequence header' : 'raw'})"
-      audio_specific_config = input_file.read(size - 2)
-      if packet_type == 0
-        if audio_specific_config.length >= 2
-          asc = Bitstream.new(audio_specific_config)
-          audio_object_type = asc.getbits(5)
-          if audio_object_type == 31
-            audio_object_type = asc.getbits(6) + 32 # Extended object type
-          end
-          puts "    Audio Object Type: #{audio_object_type} - #{mpeg4_audio_object_types[audio_object_type]}"
-
-          frequency_index = asc.getbits(4)
-          if frequency_index == 15
-            frequency = asc.getbits(24) # Extended frequency
-          else
-            frequency = mpeg4_audio_frequencies[frequency_index]
-          end
-          puts "    Sampling Frequency: #{frequency}"
-          
-          channel_config = asc.getbits(4)
-          puts "    Channel Config: #{mpeg4_channel_configurations[channel_config]}"
-
-        else
-          puts "    ERROR: AudioSpecificConfig too small! Assuming stream info is accurate."
-        end
+      # raw_data_block
+      while data.bit_offset < data.total_bits
+        syntax_element = read_syntax_element(data)
+        break if syntax_element[:id] == ID_FIL
       end
     else
-      input_file.read(size - 1)
-    end
-    
-
-  elsif kind_name == 'video'
-    format_flags = input_file.ui8
-    frame_type = (format_flags >> 4) & 15
-    codec_id = format_flags & 0xf
-    
-    puts "  Video frame type: #{frame_type} (#{video_frame_types[frame_type] || 'unknown'})"
-    puts "  Video codec: #{codec_id} (#{video_codecs[codec_id] || 'unknown'})"
-    
-    if codec_id == 4 #&& frame_type == 1 # vp6 keyframe
-      stream_bytes = input_file.read(9)
-
-      vp6_frame_mode = (stream_bytes[1] >> 7) & 1
-      vp6_q_param = (stream_bytes[1] >> 1) & 0b00111111
-      vp6_marker = stream_bytes[1] & 1
-      
-      puts "  VP6 Frame Mode: #{vp6_frame_mode}"
-      puts "  VP6 Q Param: #{vp6_q_param}"
-      puts "  VP6 Marker: #{vp6_marker} (#{vp6_marker == 1 ? 'VP60' : 'VP61/VP62'})"
-
-      offset = 2
-      # if frame_mode==0, there's an extra byte of data.
-      if vp6_frame_mode == 0
-        vp6_version = (stream_bytes[2] >> 3) & 0b00011111
-        vp6_version2 = (stream_bytes[2] >> 1) & 3
-        vp6_interlaced = stream_bytes[2] & 1
-        
-        puts "  VP6 Version: #{vp6_version}"
-        puts "  VP6 Version2: #{vp6_version2}"
-        puts "  VP6 Interlaced: #{vp6_interlaced}"
-
-        offset += 1
-
-        # if marker==1 or version2==0, there are 2 more extra data bytes
-        if vp6_marker == 1 || vp6_version2 == 0
-          vp6_secondary_buffer_offset = stream_bytes[offset] << 8 + stream_bytes[offset + 1]
-          puts "  VP6 Secondary Buffer Offset: #{vp6_secondary_buffer_offset}"
-
-          offset += 2
-        end
-
-        # Now offset points to the resolution values: [h_mb,w_mb,h_disp,w_disp]
-        enc_width = stream_bytes[offset+1] * 16
-        disp_width = stream_bytes[offset+3] * 16
-        h_adjust = (stream_bytes[0] >> 4) & 15
-
-        enc_height = stream_bytes[offset] * 16
-        disp_height = stream_bytes[offset+2] * 16
-        v_adjust = stream_bytes[0] & 0x0f
-
-        width = disp_width - h_adjust
-        height = disp_height - v_adjust
-
-        if enc_width != disp_width || enc_height != disp_height
-          puts "  Encoded Pixels: #{enc_width}"
-          puts "  Encoded Pixels: #{enc_height}"
-        end
-
-        puts "  Video width: #{width} (#{disp_width} - #{h_adjust})"
-        puts "  Video height: #{height} (#{disp_height} - #{v_adjust})"
-      else
-        if vp6_marker == 1
-          vp6_secondary_buffer_offset = stream_bytes[offset] << 8 + stream_bytes[offset + 1]
-          puts "  VP6 Secondary Buffer Offset: #{vp6_secondary_buffer_offset}"
-        end
-      end
-      
-      
-      input_file.read(size - 10)
-
-    elsif codec_id == 5 && frame_type == 1 # vp6a keyframe
-      stream_bytes = input_file.read(9)
-
-      disp_width = stream_bytes[7] * 16
-      h_adjust = (stream_bytes[0] >> 4) & 15
-      disp_height = stream_bytes[6] * 16
-      v_adjust = stream_bytes[0] & 0x0f
-
-      width = disp_width - h_adjust
-      height = disp_height - v_adjust
-
-      puts "  Video width: #{width} (#{disp_width} - #{h_adjust})"
-      puts "  Video height: #{height} (#{disp_height} - #{v_adjust})"
-
-      input_file.read(size - 10)
-
-    elsif codec_id == 7 # AVC frame
-      packet_type = input_file.ui8
-      bytes_read = 2
-
-      puts "  Packet Type: %s" % ({0 => 'AVC Sequence Header', 1 => 'AVC NALU', 2 => 'AVC end of sequence'}[packet_type] || 'unknown')
-      if packet_type == 1 && size >= 5
-        composition_time = input_file.si24
-        bytes_read += 3
-        puts "  Composition Time Offset: %0.3f" % (composition_time / 1000.0)
+      # adts_header_error_check
+      if protection_absent == 0
+        positions = []
+        num_raw_data_blocks_in_frame.times { positions << data.getbits(16) }
+        crc = data.getbits(16)
       end
 
-      input_file.read(size - bytes_read)
-    else
+      (num_raw_data_blocks_in_frame + 1).times do
+        # raw_data_block
+        while data.bit_offset < data.total_bits
+          syntax_element = read_syntax_element(data)
+          break if syntax_element[:id] == ID_FIL
+        end
 
-      input_file.read(size - 1)
+        # adts_raw_data_block_error_check
+        if protection_absent == 0
+          crc = data.getbits(16)
+        end
+      end
     end
 
-  elsif kind_name == 'script'
-    input_file.ui8 # 1 byte of junk?
-    tag_pos = 1
-
-    name_len = input_file.ui16
-    puts "  Script object name length: #{name_len}"
-    tag_pos += 2
-
-    name = input_file.read(name_len)
-    tag_pos += name_len
-
-    puts "  Script object name: #{name}"
-    
-    data_type = input_file.ui8
-    tag_pos += 1
-    puts "  Script object type: #{data_type}"
-    
-    input_file.read(size - tag_pos)
   else
-    input_file.read(size)
+    puts "  Data shorter than expected -- not decoding!"
   end
-  
 end
 
-
 puts
-close(input_file) rescue nil
+input_file.close rescue nil
