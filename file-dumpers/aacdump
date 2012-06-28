@@ -159,6 +159,22 @@ LONG_START_SEQUENCE = 1
 EIGHT_SHORT_SEQUENCE = 2
 LONG_STOP_SEQUENCE = 3
 
+ID_SCE = 0
+ID_CPE = 1
+ID_CCE = 2
+ID_LFE = 3
+ID_DSE = 4
+ID_PCE = 5
+ID_FIL = 6
+ID_END = 7
+
+EXT_FILL = 0
+EXT_FILL_DATA = 1
+EXT_DYNAMIC_RANGE = 0b1011
+EXT_SBR_DATA = 0b1101
+EXT_SBR_DATA_CRC = 0b1110
+
+
 PRED_SFB_MAX = {
   96000 => 33,
   88200 => 33,
@@ -225,12 +241,41 @@ def ics_info(bitstream)
   end
 end
 
+def extension_payload(bitstream, count)
+  extension_type = bitstream.getbits(4)
+  case extension_type
+  when EXT_DYNAMIC_RANGE:
+    # dynamic_range_info(bitstream)
+  when EXT_SBR_DATA:
+    puts "  SBR DATA!"
+    # sbr_extension_data(bitstream, id_aac, 0)
+  when EXT_SBR_DATA_CRC:
+    # sbr_extension_data(bitstream, id_aac, 1)
+    puts "  SBR DATA!"
+  when EXT_FILL_DATA:
+    # fill_nibble = bitstream.getbits(4)
+    # (count - 1).times { bitstream.getbits(8) }
+    # return count
+  else
+    # Treat just like EXT_FILL_DATA but if we were
+    # validating, we wouldn't care what the data was.
+    # fill_nibble = bitstream.getbits(4)
+    # (count - 1).times { bitstream.getbits(8) }
+    # return count
+  end
+  fill_nibble = bitstream.getbits(4)
+  (count - 1).times { bitstream.getbits(8) }
+  return count
+end
+
 def read_syntax_element(bitstream)
   se_id = bitstream.getbits(3)
+  puts "  Syntax element: #{se_id}"
   case se_id
   when ID_SCE:
     instance_tag = bitstream.getbits(4)
     individual_channel_stream(bitstream, 0)
+    {}
   when ID_CPE:
     instance_tag = bitstream.getbits(4)
     common_window = bitstream.getbits(1)
@@ -242,12 +287,29 @@ def read_syntax_element(bitstream)
       end
     end
     individual_channel_stream(bitstream, common_window)
+    {}
   when ID_CCE:
+    {}
   when ID_LFE:
+    {}
   when ID_DSE:
+    {}
   when ID_PCE:
+    {}
   when ID_FIL:
+    count = bitstream.getbits(4)
+    if count == 15
+      count += bitstream.getbits(8)
+    end
+    while count > 0
+      count -= extension_payload(bitstream, count)
+    end
     { :id => ID_FIL }
+  when ID_END:
+    { :id => ID_END }
+  else
+    puts "  UNKNOWN SYNTAX ELEMENT"
+    { :id => -1 }
   end
 end
 
@@ -315,7 +377,7 @@ while !input_file.eof?
   puts "  Channels: #{aac_channel_configs[channel_configuration]}"
   puts "  AAC Frame Length: #{aac_frame_length}"
   puts "  ADTS Buffer Fullness: #{adts_buffer_fullness}"
-  puts "  Num blocks in frame: #{num_raw_data_blocks_in_frame}+1"
+  puts "  Num blocks in frame: #{num_raw_data_blocks_in_frame}(+1)"
   
   data_length = aac_frame_length - 9 # 9 bytes for the header
   aac_data = input_file.read(data_length) if data_length > 0
@@ -332,7 +394,9 @@ while !input_file.eof?
       # raw_data_block
       while data.bit_offset < data.total_bits
         syntax_element = read_syntax_element(data)
-        break if syntax_element[:id] == ID_FIL
+        break if syntax_element[:id] == ID_END
+
+        # break # We don't parse 'em right yet, so quit out.
       end
     else
       # adts_header_error_check
@@ -346,7 +410,9 @@ while !input_file.eof?
         # raw_data_block
         while data.bit_offset < data.total_bits
           syntax_element = read_syntax_element(data)
-          break if syntax_element[:id] == ID_FIL
+          break if syntax_element[:id] == ID_END
+
+          # break # We don't parse 'em right yet, so quit out.
         end
 
         # adts_raw_data_block_error_check
