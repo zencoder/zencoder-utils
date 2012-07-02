@@ -1,33 +1,17 @@
 #/usr/bin/env ruby
 
-# Clear out any environment options.
-if ARGV.first == '-e'
-  ARGV.shift(2)
-end
-
-def numeric_arg_with_default(default_value)
-  value = ARGV.shift
-  if value =~ /\d/
-    value.to_f
-  else
-    default_value
-  end
-end
-
-hour_count = numeric_arg_with_default(6)
-cloud = numeric_arg_with_default(1)
-point_count = numeric_arg_with_default(1440)
+hour_count = (ARGV.shift || 6).to_i
+point_count = (ARGV.shift || 1440).to_i
 
 TIME_OFFSET = -7.hours
-CLOUD_ID = cloud
+CLOUD_ID = 1
 ACCOUNT_ID = :all
 # ACCOUNT_ID = 2370
 EXCLUDE_LOW_PRIORITY = true
-EXCLUDE_TEST_JOBS = true
 
 DURATION = hour_count.hours
 START_TIME = Time.now - DURATION
-# START_TIME = Time.gm(2012,5,2,13,30,0)
+# START_TIME = Time.gm(2011,8,22,8,30,0)
 DATA_POINTS = point_count
 # DATA_POINTS = 6.hours / 15.seconds
 
@@ -41,9 +25,7 @@ output_analysis_sets = [:launched_workers, :active_workers, :launched_worker_out
 account_job_analysis = [:queued_inputs, :processing_inputs, :queued_outputs, :queued_output_load, :processing_outputs, :processing_output_load]
 account_job_analysis_without_capacities = [:queued_outputs, :processing_outputs, :queued_inputs, :processing_inputs]
 
-simple_scale_analysis_sets = [:launched_worker_input_capacity, :active_worker_input_capacity, :queued_inputs, :processing_inputs, :launched_worker_output_capacity, :active_worker_output_capacity, :output_autoscale_threshold, :active_worker_max_output_capacity, :queued_output_load, :processing_output_load]
-
-SETS_TO_SHOW = simple_scale_analysis_sets
+SETS_TO_SHOW = scale_analysis_sets
 
 #####################################################################
 
@@ -55,22 +37,21 @@ SETS_TO_SHOW = simple_scale_analysis_sets
   :bad_worker_input_capacity       => { :color => '#669900', :capacity_scale => false, :desc => 'Bad Worker Input Capacity' },
   :bad_worker_output_capacity      => { :color => '#66ffff', :capacity_scale => true,  :desc => 'Bad Worker Output Capacity' },
 
-  :launched_worker_input_capacity  => { :color => '#CE341b', :capacity_scale => false, :desc => 'Launched Worker Input Capacity' },
-  :active_worker_input_capacity    => { :color => '#DE4421', :capacity_scale => false, :desc => 'Active Worker Input Capacity' },
+  :launched_worker_input_capacity  => { :color => '#aa6600', :capacity_scale => false, :desc => 'Launched Worker Input Capacity' },
+  :active_worker_input_capacity    => { :color => '#ffcc00', :capacity_scale => false, :desc => 'Active Worker Input Capacity' },
   :queued_inputs                   => { :color => '#993333', :capacity_scale => false, :desc => 'Queued Inputs' },
   :processing_inputs               => { :color => '#cc9999', :capacity_scale => false, :desc => 'Processing Inputs' },
   :input_autoscale_threshold       => { :color => '#cc0000', :capacity_scale => false, :desc => 'Input Autoscale Threshold' },
 
   :launched_worker_output_capacity => { :color => '#0066aa', :capacity_scale => true,  :desc => 'Launched Worker Output Capacity' },
   :active_worker_output_capacity   => { :color => '#00ccff', :capacity_scale => true,  :desc => 'Active Worker Output Capacity' },
-  :launched_worker_max_output_capacity => { :color => '#E39024', :capacity_scale => true,  :desc => 'Launched Worker Output Max' },
-  :active_worker_max_output_capacity   => { :color => '#FF9914', :capacity_scale => true,  :desc => 'Active Worker Output Max' },
   :queued_outputs                  => { :color => '#339966', :capacity_scale => false, :desc => 'Queued Outputs' },
   :queued_output_load              => { :color => '#33FF99', :capacity_scale => true,  :desc => 'Queued Output Load' },
   :processing_outputs              => { :color => '#99ffcc', :capacity_scale => false, :desc => 'Processing Outputs' },
   :processing_output_load          => { :color => '#9999cc', :capacity_scale => true,  :desc => 'Processing Output Load' },
   :output_autoscale_threshold      => { :color => '#6666cc', :capacity_scale => true,  :desc => 'Output Autoscale Threshold' },
 }
+
 
 @start_time = START_TIME
 @end_time = START_TIME + DURATION
@@ -80,21 +61,13 @@ SETS_TO_SHOW = simple_scale_analysis_sets
 
 puts "Querying database for data..."
 
-@workers = @cloud.workers.find(:all, :select => 'id,worker_type_id,state,created_at,alive_at,killed_at,updated_at,last_heartbeat_at,url,instance_id', :conditions => ["(killed_at >= ? OR (killed_at is null AND updated_at >= ?)) AND created_at < ?", @start_time, @start_time, @end_time])
+@workers = @cloud.workers.find(:all, :select => 'id,worker_type_id,state,created_at,alive_at,killed_at,updated_at,url,instance_id', :conditions => ["(killed_at >= ? OR (killed_at is null AND updated_at >= ?)) AND created_at < ?", @start_time, @start_time, @end_time])
 if ACCOUNT_ID != :all
-  raise "Not yet optimized."
   @inputs = @cloud.input_media_files.find(:all, :select => 'id,account_id,job_id,state,created_at,started_at,finished_at,times,low_priority', :conditions => ["(finished_at is null or finished_at >= ?) and created_at < ? and state != 'cancelled' and account_id = ?", @start_time, @end_time, ACCOUNT_ID])
   @outputs = @cloud.output_media_files.find(:all, :select => 'id,account_id,job_id,state,created_at,started_at,updated_at,finished_at,times,low_priority,cached_queue_time,cached_total_time,estimated_transcode_load', :conditions => ["(finished_at is null or finished_at >= ?) and created_at < ? and state != 'cancelled' and account_id = ?", @start_time, @end_time, ACCOUNT_ID])
 else
-  running_inputs =  @cloud.input_media_files.find(:all, :select => 'id,account_id,job_id,state,created_at,started_at,finished_at,times,low_priority,test', :conditions => ["finished_at is null and created_at < ? and state != 'cancelled'", @end_time])
-  finished_inputs = @cloud.input_media_files.find(:all, :select => 'id,account_id,job_id,state,created_at,started_at,finished_at,times,low_priority,test', :conditions => ["finished_at >= ? and finished_at <= ? and created_at < ? and state != 'cancelled'", @start_time, @end_time + 3.hours, @end_time])
-  running_inputs.delete_if { |r| finished_inputs.detect { |f| f.id == r.id } }
-  @inputs = running_inputs + finished_inputs
-
-  running_outputs =  @cloud.output_media_files.find(:all, :select => 'id,account_id,job_id,state,created_at,started_at,updated_at,finished_at,times,low_priority,test,cached_queue_time,cached_total_time,estimated_transcode_load', :conditions => ["finished_at is null and created_at < ? and state = 'processing'", @end_time])
-  finished_outputs = @cloud.output_media_files.find(:all, :select => 'id,account_id,job_id,state,created_at,started_at,updated_at,finished_at,times,low_priority,test,cached_queue_time,cached_total_time,estimated_transcode_load', :conditions => ["finished_at >= ? and finished_at <= ? and created_at < ? and state != 'cancelled'", @start_time, @end_time + 3.hours, @end_time])
-  running_outputs.delete_if { |r| finished_outputs.detect { |f| f.id == r.id } }
-  @outputs = running_outputs + finished_outputs
+  @inputs = @cloud.input_media_files.find(:all, :select => 'id,account_id,job_id,state,created_at,started_at,finished_at,times,low_priority', :conditions => ["(finished_at is null or finished_at >= ?) and created_at < ? and state != 'cancelled'", @start_time, @end_time])
+  @outputs = @cloud.output_media_files.find(:all, :select => 'id,account_id,job_id,state,created_at,started_at,updated_at,finished_at,times,low_priority,cached_queue_time,cached_total_time,estimated_transcode_load', :conditions => ["(finished_at is null or finished_at >= ?) and created_at < ? and state != 'cancelled'", @start_time, @end_time])
 end
 
 puts "Queries finished."
@@ -108,34 +81,25 @@ puts "Queries finished."
   next unless worker.killed_at || ['launching','active','terminating','updating','disappeared'].include?(worker.state)
 
   input_capacity = @worker_types[worker.worker_type_id].max_downloads || 6
-  output_capacity = @worker_types[worker.worker_type_id].target_load || 900
-  max_output_capacity = @worker_types[worker.worker_type_id].max_load || output_capacity
+  output_capacity = @worker_types[worker.worker_type_id].max_load || 900
 
   created = worker.created_at.to_i
   updated = worker.updated_at.to_i
-
-  # Try to account for ones that got updated (so their alive_at is not when they actually launched), and just
-  # use a bit after the created_at time.
   if worker.alive_at && (worker.alive_at - worker.created_at > 30.minutes)
     alive = created + 4.minutes
   else
     alive = (worker.alive_at || Time.now + 1.year).to_i
   end
-
-  if worker.state == 'disappeared'
-    killed = (worker.killed_at || worker.last_heartbeat_at || worker.updated_at || Time.now + 1.year).to_i
-  else
-    killed = (worker.killed_at || Time.now + 1.year).to_i
-  end
+  killed = (worker.killed_at || Time.now + 1.year).to_i
 
   if worker.url.blank? && ['terminated','disappeared'].include?(worker.state)
-    @worker_time_data << { :type => :bad_launch, :time => created, :input_capacity => input_capacity, :output_capacity => output_capacity, :max_output_capacity => max_output_capacity }
-    @worker_time_data << { :type => :bad_kill,   :time => updated, :input_capacity => input_capacity, :output_capacity => output_capacity, :max_output_capacity => max_output_capacity }
+    @worker_time_data << { :type => :bad_launch, :time => created, :input_capacity => input_capacity, :output_capacity => output_capacity }
+    @worker_time_data << { :type => :bad_kill,   :time => updated, :input_capacity => input_capacity, :output_capacity => output_capacity }
   elsif worker.url.present? || ['launching'].include?(worker.state)
     # Good worker.
-    @worker_time_data << { :type => :launched, :time => created, :input_capacity => input_capacity, :output_capacity => output_capacity, :max_output_capacity => max_output_capacity }
-    @worker_time_data << { :type => :active,   :time => alive,   :input_capacity => input_capacity, :output_capacity => output_capacity, :max_output_capacity => max_output_capacity }
-    @worker_time_data << { :type => :killed,   :time => killed,  :input_capacity => input_capacity, :output_capacity => output_capacity, :max_output_capacity => max_output_capacity }
+    @worker_time_data << { :type => :launched, :time => created, :input_capacity => input_capacity, :output_capacity => output_capacity }
+    @worker_time_data << { :type => :active,   :time => alive,   :input_capacity => input_capacity, :output_capacity => output_capacity }
+    @worker_time_data << { :type => :killed,   :time => killed,  :input_capacity => input_capacity, :output_capacity => output_capacity }
   else
     puts "Ignoring bad worker record - #{worker.id}"
   end
@@ -150,7 +114,6 @@ puts "Loaded worker data..."
 @inputs.each do |input|
   next unless input.finished_at || ['waiting','processing'].include?(input.state)
   next if EXCLUDE_LOW_PRIORITY && input.low_priority
-  next if EXCLUDE_TEST_JOBS && input.test?
 
   @input_time_data << { :type => :queued, :time => input.created_at.to_i }
   @input_time_data << { :type => :started, :time => (input.started_at || Time.now + 1.year).to_i}
@@ -165,35 +128,28 @@ puts "Loaded input data..."
 @output_time_data = []
 @outputs.each do |output|
   next if output.state == 'no_input'
-  next unless output.finished_at || ['ready','processing','uploading'].include?(output.state)
+  next unless output.finished_at || ['ready','processing'].include?(output.state)
   next if EXCLUDE_LOW_PRIORITY && output.low_priority
-  next if EXCLUDE_TEST_JOBS && output.test?
 
   # Will figure this out later too.
-  # next if output.state == 'failed'
+  next if output.state == 'failed'
   
   if output.finished_at.nil?
     if output.state == 'ready'
       processing_start = Time.now + 1.year
       queue_start = output.updated_at
-    elsif ['processing','uploading'].include?(output.state)
-      processing_start = output.started_at || output.updated_at
+    else # processing
+      processing_start = output.updated_at
       queue_start = @input_finish_times[output.job_id.to_i] || output.created_at
-    else
-      puts "Don't know what to do with output #{output.id} that is not finished and has state #{output.state}!"
     end
   else
-    processing_start = output.started_at || (output.finished_at - (output.transcode_time.to_f + output.upload_time.to_f))
-
-    if output.cached_queue_time
-      queue_start = processing_start - output.cached_queue_time.to_f
-    else
-      queue_start = @input_finish_times[output.job_id.to_i]
-      if !queue_start
-        puts "Don't know what to do with output #{output.id} -- no queue start time!"
-        next
-      end
+    if !output.cached_queue_time
+      puts "Don't know what to do with output #{output.id}!"
+      next
     end
+
+    processing_start = output.finished_at - (output.transcode_time.to_f + output.upload_time.to_f)
+    queue_start = processing_start - output.cached_queue_time.to_f
   end
 
   load = output.estimated_transcode_load || 200
@@ -257,14 +213,12 @@ END_HTML
         @baselines[:launched_workers] += 1
         @baselines[:launched_worker_input_capacity] += data[:input_capacity]
         @baselines[:launched_worker_output_capacity] += data[:output_capacity]
-        @baselines[:launched_worker_max_output_capacity] += data[:max_output_capacity]
         @baselines[:input_autoscale_threshold] += data[:input_capacity] * 1.2
         @baselines[:output_autoscale_threshold] += data[:output_capacity] * 1.2
       when :active
         @baselines[:active_workers] += 1
         @baselines[:active_worker_input_capacity] += data[:input_capacity]
         @baselines[:active_worker_output_capacity] += data[:output_capacity]
-        @baselines[:active_worker_max_output_capacity] += data[:max_output_capacity]
       when :bad_launch
         @baselines[:bad_workers] += 1
         @baselines[:bad_worker_input_capacity] += data[:input_capacity]
@@ -285,8 +239,8 @@ END_HTML
     point_loc = DATA_POINTS + 1 if point_loc > DATA_POINTS
 
     while prev_point < point_loc
-      [:launched_workers, :launched_worker_input_capacity, :launched_worker_output_capacity, :launched_worker_max_output_capacity,
-       :active_workers, :active_worker_input_capacity, :active_worker_output_capacity, :active_worker_max_output_capacity,
+      [:launched_workers, :launched_worker_input_capacity, :launched_worker_output_capacity,
+       :active_workers, :active_worker_input_capacity, :active_worker_output_capacity,
        :bad_workers, :bad_worker_input_capacity, :bad_worker_output_capacity,
        :input_autoscale_threshold, :output_autoscale_threshold].each do |data_set|
         @data_points[data_set][prev_point + 1] = @data_points[data_set][prev_point]
@@ -301,25 +255,21 @@ END_HTML
       @data_points[:launched_workers][point_loc] += 1
       @data_points[:launched_worker_input_capacity][point_loc] += data[:input_capacity]
       @data_points[:launched_worker_output_capacity][point_loc] += data[:output_capacity]
-      @data_points[:launched_worker_max_output_capacity][point_loc] += data[:max_output_capacity]
       @data_points[:input_autoscale_threshold][point_loc] += data[:input_capacity] * 1.2
       @data_points[:output_autoscale_threshold][point_loc] += data[:output_capacity] * 1.2
     when :active
       @data_points[:active_workers][point_loc] += 1
       @data_points[:active_worker_input_capacity][point_loc] += data[:input_capacity]
       @data_points[:active_worker_output_capacity][point_loc] += data[:output_capacity]
-      @data_points[:active_worker_max_output_capacity][point_loc] += data[:max_output_capacity]
     when :killed
       @data_points[:launched_workers][point_loc] -= 1
       @data_points[:launched_worker_input_capacity][point_loc] -= data[:input_capacity]
       @data_points[:launched_worker_output_capacity][point_loc] -= data[:output_capacity]
-      @data_points[:launched_worker_max_output_capacity][point_loc] -= data[:max_output_capacity]
       @data_points[:input_autoscale_threshold][point_loc] -= data[:input_capacity] * 1.2
       @data_points[:output_autoscale_threshold][point_loc] -= data[:output_capacity] * 1.2
       @data_points[:active_workers][point_loc] -= 1
       @data_points[:active_worker_input_capacity][point_loc] -= data[:input_capacity]
       @data_points[:active_worker_output_capacity][point_loc] -= data[:output_capacity]
-      @data_points[:active_worker_max_output_capacity][point_loc] -= data[:max_output_capacity]
     when :bad_launch
       @data_points[:bad_workers][point_loc] += 1
       @data_points[:bad_worker_input_capacity][point_loc] += data[:input_capacity]
