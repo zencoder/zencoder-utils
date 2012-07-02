@@ -129,6 +129,7 @@ class BoxWithChildren < Box
 
   handles 'moof', 'Movie Fragment'
   handles 'traf', 'Track Fragment'
+  handles 'mfra', 'Movie Fragment Random Access'
 
   def read_data(stream)
     while stream.pos < (@base_offset + @size) && (box = Box.read(stream, :parent => self))
@@ -1146,6 +1147,57 @@ class Mp4aSubBox < SubBoxWithSubBoxes
     cputs "Sample Size: #{@sample_size}", :dark_gray
     print prefix
     cputs "Sample Rate: #{@sample_rate}", :dark_gray
+  end
+end
+
+# handles 'tfra', 'Track Fragment Random Access'
+# handles 'mfro', 'Movie Fragment Random Access Offset'
+
+class TfraBox < Box
+  handles 'tfra', 'Track Fragment Random Access'
+
+  attr_accessor :version, :flags, :track_id, :entry_count
+
+  def initialize(*args)
+    @version = nil
+    @flags = nil
+    @track_id = nil
+    @entry_count = nil
+    super
+  end
+
+  def read_data(stream)
+    @version,@flags = stream.ui8, stream.ui24
+    @track_id = stream.ui32
+    reserved_and_lengths = stream.ui32
+    @entry_count = stream.ui32
+  end
+
+  def print_extra_info(prefix = '')
+    print prefix
+    cputs "Entry Count: #{@entry_count}", :dark_gray
+  end
+end
+
+class MfroBox < Box
+  handles 'mfro', 'Movie Fragment Random Access Offset'
+
+  attr_accessor :version, :flags, :size
+
+  def initialize(*args)
+    @version = nil
+    @flags = nil
+    @size = nil
+    super
+  end
+
+  def read_data(stream)
+    @version,@flags,@size = stream.ui8, stream.ui24, stream.ui32
+  end
+
+  def print_extra_info(prefix = '')
+    print prefix
+    cputs "Size: #{@size}", :dark_gray
   end
 end
 
