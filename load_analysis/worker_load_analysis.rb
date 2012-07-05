@@ -22,7 +22,7 @@ TIME_OFFSET = -7.hours
 CLOUD_ID = cloud
 ACCOUNT_ID = :all
 # ACCOUNT_ID = 2370
-EXCLUDE_LOW_PRIORITY = true
+EXCLUDE_LOW_PRIORITY = false
 EXCLUDE_TEST_JOBS = true
 
 DURATION = hour_count.hours
@@ -41,7 +41,7 @@ output_analysis_sets = [:launched_workers, :active_workers, :launched_worker_out
 account_job_analysis = [:queued_inputs, :processing_inputs, :queued_outputs, :queued_output_load, :processing_outputs, :processing_output_load]
 account_job_analysis_without_capacities = [:queued_outputs, :processing_outputs, :queued_inputs, :processing_inputs]
 
-simple_scale_analysis_sets = [:launched_worker_input_capacity, :active_worker_input_capacity, :queued_inputs, :processing_inputs, :launched_worker_output_capacity, :active_worker_output_capacity, :output_autoscale_threshold, :active_worker_max_output_capacity, :queued_output_load, :processing_output_load]
+simple_scale_analysis_sets = [:launched_worker_input_capacity, :active_worker_input_capacity, :queued_low_priority_inputs, :queued_inputs, :processing_inputs, :launched_worker_output_capacity, :active_worker_output_capacity, :output_autoscale_threshold, :active_worker_max_output_capacity, :queued_low_priority_output_load, :queued_output_load, :processing_output_load]
 
 SETS_TO_SHOW = simple_scale_analysis_sets
 
@@ -58,6 +58,7 @@ SETS_TO_SHOW = simple_scale_analysis_sets
   :launched_worker_input_capacity  => { :color => '#CE341b', :capacity_scale => false, :desc => 'Launched Worker Input Capacity' },
   :active_worker_input_capacity    => { :color => '#DE4421', :capacity_scale => false, :desc => 'Active Worker Input Capacity' },
   :queued_inputs                   => { :color => '#993333', :capacity_scale => false, :desc => 'Queued Inputs' },
+  :queued_low_priority_inputs      => { :color => '#993333', :capacity_scale => false, :desc => 'Queued Low Priority Inputs', :style => 'dashed' },
   :processing_inputs               => { :color => '#cc9999', :capacity_scale => false, :desc => 'Processing Inputs' },
   :input_autoscale_threshold       => { :color => '#cc0000', :capacity_scale => false, :desc => 'Input Autoscale Threshold' },
 
@@ -67,6 +68,7 @@ SETS_TO_SHOW = simple_scale_analysis_sets
   :active_worker_max_output_capacity   => { :color => '#FF9914', :capacity_scale => true,  :desc => 'Active Worker Output Max' },
   :queued_outputs                  => { :color => '#339966', :capacity_scale => false, :desc => 'Queued Outputs' },
   :queued_output_load              => { :color => '#33FF99', :capacity_scale => true,  :desc => 'Queued Output Load' },
+  :queued_low_priority_output_load => { :color => '#33FF99', :capacity_scale => true,  :desc => 'Queued Low Priority Output Load', :style => 'dashed' },
   :processing_outputs              => { :color => '#99ffcc', :capacity_scale => false, :desc => 'Processing Outputs' },
   :processing_output_load          => { :color => '#9999cc', :capacity_scale => true,  :desc => 'Processing Output Load' },
   :output_autoscale_threshold      => { :color => '#6666cc', :capacity_scale => true,  :desc => 'Output Autoscale Threshold' },
@@ -152,9 +154,9 @@ puts "Loaded worker data..."
   next if EXCLUDE_LOW_PRIORITY && input.low_priority
   next if EXCLUDE_TEST_JOBS && input.test?
 
-  @input_time_data << { :type => :queued, :time => input.created_at.to_i }
-  @input_time_data << { :type => :started, :time => (input.started_at || Time.now + 1.year).to_i}
-  @input_time_data << { :type => :finished, :time => (input.finished_at || Time.now + 1.year).to_i}
+  @input_time_data << { :type => :queued, :time => input.created_at.to_i, :low_priority => input.low_priority }
+  @input_time_data << { :type => :started, :time => (input.started_at || Time.now + 1.year).to_i, :low_priority => input.low_priority }
+  @input_time_data << { :type => :finished, :time => (input.finished_at || Time.now + 1.year).to_i, :low_priority => input.low_priority }
 
   @input_finish_times[input.job_id.to_i] = input.finished_at
   # @input_total_times[input.id] = input.total_time rescue nil
@@ -198,9 +200,9 @@ puts "Loaded input data..."
 
   load = output.estimated_transcode_load || 200
 
-  @output_time_data << { :type => :queued, :time => queue_start.to_i, :load => load }
-  @output_time_data << { :type => :started, :time => processing_start.to_i, :load => load }
-  @output_time_data << { :type => :finished, :time => (output.finished_at || Time.now + 1.year).to_i, :load => load }
+  @output_time_data << { :type => :queued, :time => queue_start.to_i, :load => load, :low_priority => output.low_priority }
+  @output_time_data << { :type => :started, :time => processing_start.to_i, :load => load, :low_priority => output.low_priority }
+  @output_time_data << { :type => :finished, :time => (output.finished_at || Time.now + 1.year).to_i, :load => load, :low_priority => output.low_priority }
 end
 @output_time_data = @output_time_data.sort_by { |d| d[:time] }
 puts "Loaded output data..."
@@ -229,6 +231,9 @@ END_HTML
 
   SETS_TO_SHOW.each do |data_set|
     f.puts "data.addColumn('number','#{@sets_config[data_set][:desc]}')"
+    if @sets_config[data_set][:desc] =~ /low priority/i
+      f.puts "data.addColumn({type:'boolean',role:'certainty'})"
+    end
   end
 
   f.puts "data.addRows(["
@@ -335,6 +340,7 @@ END_HTML
   ############# SET UP INPUTS DATA ##############
   prev_point = 0
   queued_subtractions = 0
+  queued_low_priority_subtractions = 0
   @input_time_data.each do |data|
     data_type = data[:type]
 
@@ -342,7 +348,8 @@ END_HTML
     if data[:time] < @start_time.to_i
       case data_type
       when :queued
-        @baselines[:queued_inputs] += 1
+        @baselines[:queued_inputs] += 1 unless data[:low_priority]
+        @baselines[:queued_low_priority_inputs] += 1
       when :started
         @baselines[:processing_inputs] += 1
       end
@@ -356,10 +363,14 @@ END_HTML
     point_loc = DATA_POINTS + 1 if point_loc > DATA_POINTS
 
     while prev_point < point_loc
-      [:queued_inputs, :processing_inputs].each do |data_set|
+      [:queued_inputs].each do |data_set|
         @data_points[data_set][prev_point + 1] = @data_points[data_set][prev_point] - queued_subtractions
       end
+      [:queued_low_priority_inputs, :processing_inputs].each do |data_set|
+        @data_points[data_set][prev_point + 1] = @data_points[data_set][prev_point] - queued_low_priority_subtractions
+      end
       queued_subtractions = 0
+      queued_low_priority_subtractions = 0
       prev_point += 1
     end
     
@@ -367,11 +378,13 @@ END_HTML
 
     case data_type
     when :queued
-      @data_points[:queued_inputs][point_loc] += 1
+      @data_points[:queued_inputs][point_loc] += 1 unless data[:low_priority]
+      @data_points[:queued_low_priority_inputs][point_loc] += 1
     when :started
       @data_points[:processing_inputs][point_loc] += 1
     when :finished
-      queued_subtractions += 1
+      queued_subtractions += 1 unless data[:low_priority]
+      queued_low_priority_subtractions += 1
     end
   end
   puts "  Input analysis done."
@@ -380,6 +393,7 @@ END_HTML
   prev_point = 0
   queued_subtractions = 0
   queued_load_subtractions = 0
+  queued_low_priority_load_subtractions = 0
   @output_time_data.each do |data|
     data_type = data[:type]
 
@@ -388,7 +402,8 @@ END_HTML
       case data_type
       when :queued
         @baselines[:queued_outputs] += 1
-        @baselines[:queued_output_load] += data[:load]
+        @baselines[:queued_output_load] += data[:load] unless data[:low_priority]
+        @baselines[:queued_low_priority_output_load] += data[:load]
       when :started
         @baselines[:processing_outputs] += 1
         @baselines[:processing_output_load] += data[:load]
@@ -406,11 +421,15 @@ END_HTML
       [:queued_outputs, :processing_outputs].each do |data_set|
         @data_points[data_set][prev_point + 1] = @data_points[data_set][prev_point] - queued_subtractions
       end
-      [:queued_output_load, :processing_output_load].each do |data_set|
+      [:queued_output_load].each do |data_set|
         @data_points[data_set][prev_point + 1] = @data_points[data_set][prev_point] - queued_load_subtractions
+      end
+      [:queued_low_priority_output_load, :processing_output_load].each do |data_set|
+        @data_points[data_set][prev_point + 1] = @data_points[data_set][prev_point] - queued_low_priority_load_subtractions
       end
       queued_subtractions = 0
       queued_load_subtractions = 0
+      queued_low_priority_load_subtractions = 0
       prev_point += 1
     end
     
@@ -419,13 +438,15 @@ END_HTML
     case data_type
     when :queued
       @data_points[:queued_outputs][point_loc] += 1
-      @data_points[:queued_output_load][point_loc] += data[:load]
+      @data_points[:queued_output_load][point_loc] += data[:load] unless data[:low_priority]
+      @data_points[:queued_low_priority_output_load][point_loc] += data[:load]
     when :started
       @data_points[:processing_outputs][point_loc] += 1
       @data_points[:processing_output_load][point_loc] += data[:load]
     when :finished
       queued_subtractions += 1
-      queued_load_subtractions += data[:load]
+      queued_load_subtractions += data[:load] unless data[:low_priority]
+      queued_low_priority_load_subtractions += data[:load]
     end
   end
   puts "  Output analysis done."
@@ -460,6 +481,9 @@ END_HTML
     values = []
     SETS_TO_SHOW.each do |data_set|
       values << (@baselines[data_set].to_f + @data_points[data_set][p].to_f).round
+      if @sets_config[data_set][:desc] =~ /low priority/i
+        values << 'false'
+      end
     end
     f.puts "  ['%s', %s]," % [time, values.join(',')]
   end
