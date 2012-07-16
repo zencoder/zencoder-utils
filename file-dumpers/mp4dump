@@ -130,6 +130,7 @@ class BoxWithChildren < Box
   handles 'moof', 'Movie Fragment'
   handles 'traf', 'Track Fragment'
   handles 'mfra', 'Movie Fragment Random Access'
+  handles 'udta', 'User Data'
 
   def read_data(stream)
     while stream.pos < (@base_offset + @size) && (box = Box.read(stream, :parent => self))
@@ -542,6 +543,7 @@ class SubBox < Box
 end
 
 class BoxWithSubBoxes < BoxWithChildren
+  handles 'ilst', "The iTunes/iPod Container Box"
 
   def read_data(stream)
     @data = stream.read(@data_size)
@@ -561,6 +563,8 @@ end
 
 class SubBoxWithSubBoxes < SubBox
   handles 'wave', 'Wave Audio Description'
+  handles "----", "iTunes Freeform Metadata"
+  handles "\xA9too", "Encoding Tool"
 
   def read_data(stream)
     @data = stream.read(@data_size)
@@ -1201,6 +1205,48 @@ class MfroBox < Box
   end
 end
 
+class IlstDataBox < SubBox
+  handles "name", "iTunes Freeform Metadata Name"
+  handles "mean", "iTunes Freeform Metadata Meaning"
+  handles "data", "iTunes Freeform Metadata Data"
+
+  attr_accessor :value
+
+  def read_data(stream)
+    super
+    @value = nil
+
+    return unless @data
+
+    case @kind
+    when 'data'
+      @value = @data[8..-1]
+    when 'name','mean'
+      @value = @data[4..-1]
+    end
+  end
+
+  def print_extra_info(prefix = '')
+    if @value
+      print prefix
+      cputs "Value: #{@value}", :dark_gray
+
+      if @kind == 'data' && @value.to_s =~ /^ 00000000 /
+        name_atom = parent.first_child('name')
+        if name_atom.nil? || name_atom.value == 'iTunSMPB'
+          values = @value.strip.split
+          print prefix
+          cputs "Priming:   #{values[1].to_i(15)}", :dark_gray
+          print prefix
+          cputs "Remainder: #{values[2].to_i(15)}", :dark_gray
+          print prefix
+          cputs "Samples:   #{values[3].to_i(15)}", :dark_gray
+        end
+      end
+    end
+  end
+end
+
 class AlacSubBox < SubBox
   handles 'alac', 'ALAC Audio Description'
 
@@ -1368,6 +1414,15 @@ class EsdsSubBox < SubBox
     return length
   rescue
     0
+  end
+end
+
+class MetaBox < BoxWithChildren
+  handles 'meta', 'Meta Data'
+
+  def read_data(stream)
+      @version,@flags = stream.ui8,stream.ui24
+    super
   end
 end
 
