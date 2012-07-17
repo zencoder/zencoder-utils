@@ -16,17 +16,18 @@ end
 
 hour_count = numeric_arg_with_default(6)
 cloud = numeric_arg_with_default(1)
+start_hour = numeric_arg_with_default(0)
 point_count = numeric_arg_with_default(1440)
 
 TIME_OFFSET = -7.hours
 CLOUD_ID = cloud
 ACCOUNT_ID = :all
 # ACCOUNT_ID = 2370
-EXCLUDE_LOW_PRIORITY = false
+EXCLUDE_LOW_PRIORITY = true
 EXCLUDE_TEST_JOBS = true
 
 DURATION = hour_count.hours
-START_TIME = Time.now - DURATION
+START_TIME = (start_hour == 0) ? (Time.now - DURATION) : (Time.now - start_hour.hours)
 # START_TIME = Time.gm(2012,5,2,13,30,0)
 DATA_POINTS = point_count
 # DATA_POINTS = 6.hours / 15.seconds
@@ -41,9 +42,11 @@ output_analysis_sets = [:launched_workers, :active_workers, :launched_worker_out
 account_job_analysis = [:queued_inputs, :processing_inputs, :queued_outputs, :queued_output_load, :processing_outputs, :processing_output_load]
 account_job_analysis_without_capacities = [:queued_outputs, :processing_outputs, :queued_inputs, :processing_inputs]
 
+simple_scale_analysis_sets_without_low_priority = [:launched_worker_input_capacity, :active_worker_input_capacity, :queued_inputs, :processing_inputs, :launched_worker_output_capacity, :active_worker_output_capacity, :output_autoscale_threshold, :active_worker_max_output_capacity, :queued_output_load, :processing_output_load]
 simple_scale_analysis_sets = [:launched_worker_input_capacity, :active_worker_input_capacity, :queued_low_priority_inputs, :queued_inputs, :processing_inputs, :launched_worker_output_capacity, :active_worker_output_capacity, :output_autoscale_threshold, :active_worker_max_output_capacity, :queued_low_priority_output_load, :queued_output_load, :processing_output_load]
 
-SETS_TO_SHOW = simple_scale_analysis_sets
+SETS_TO_SHOW = simple_scale_analysis_sets_without_low_priority
+# SETS_TO_SHOW = simple_scale_analysis_sets
 
 #####################################################################
 
@@ -80,7 +83,7 @@ SETS_TO_SHOW = simple_scale_analysis_sets
 @cloud = Cloud.find(CLOUD_ID)
 @cloud.worker_types.all.each { |wt| @worker_types[wt.id] = wt }
 
-puts "Querying database for data..."
+puts "#{Time.now} Querying database for data..."
 
 @workers = @cloud.workers.find(:all, :select => 'id,worker_type_id,state,created_at,alive_at,killed_at,updated_at,last_heartbeat_at,url,instance_id', :conditions => ["(killed_at >= ? OR (killed_at is null AND updated_at >= ?)) AND created_at < ?", @start_time, @start_time, @end_time])
 if ACCOUNT_ID != :all
@@ -88,20 +91,41 @@ if ACCOUNT_ID != :all
   @inputs = @cloud.input_media_files.find(:all, :select => 'id,account_id,job_id,state,created_at,started_at,finished_at,times,low_priority', :conditions => ["(finished_at is null or finished_at >= ?) and created_at < ? and state != 'cancelled' and account_id = ?", @start_time, @end_time, ACCOUNT_ID])
   @outputs = @cloud.output_media_files.find(:all, :select => 'id,account_id,job_id,state,created_at,started_at,updated_at,finished_at,times,low_priority,cached_queue_time,cached_total_time,estimated_transcode_load', :conditions => ["(finished_at is null or finished_at >= ?) and created_at < ? and state != 'cancelled' and account_id = ?", @start_time, @end_time, ACCOUNT_ID])
 else
+  before = Time.now
   running_inputs =  @cloud.input_media_files.find(:all, :select => 'id,account_id,job_id,state,created_at,started_at,finished_at,times,low_priority,test', :conditions => ["finished_at is null and created_at < ? and state != 'cancelled'", @end_time])
-  finished_inputs = @cloud.input_media_files.find(:all, :select => 'id,account_id,job_id,state,created_at,started_at,finished_at,times,low_priority,test', :conditions => ["finished_at >= ? and finished_at <= ? and created_at < ? and state != 'cancelled'", @start_time, @end_time + 3.hours, @end_time])
-  running_inputs.delete_if { |r| finished_inputs.detect { |f| f.id == r.id } }
-  @inputs = running_inputs + finished_inputs
+  puts "  Got running inputs. (#{Time.now-before} seconds)"
 
+  before = Time.now
+  finished_inputs = @cloud.input_media_files.find(:all, :select => 'id,account_id,job_id,state,created_at,started_at,finished_at,times,low_priority,test', :conditions => ["finished_at >= ? and finished_at <= ? and created_at < ? and state != 'cancelled'", @start_time, @end_time + 3.hours, @end_time])
+  puts "  Got finished inputs. (#{Time.now-before} seconds)"
+
+  before = Time.now
+  in_finished_set = {}
+  finished_inputs.each { |f| in_finished_set[f.id] = true }
+  running_inputs.delete_if { |r| in_finished_set[r.id] }
+  @inputs = running_inputs + finished_inputs
+  puts "  Combined inputs. (#{Time.now-before} seconds)"
+
+
+  before = Time.now
   running_outputs =  @cloud.output_media_files.find(:all, :select => 'id,account_id,job_id,state,created_at,started_at,updated_at,finished_at,times,low_priority,test,cached_queue_time,cached_total_time,estimated_transcode_load', :conditions => ["finished_at is null and created_at < ? and state = 'processing'", @end_time])
+  puts "  Got running outputs. (#{Time.now-before} seconds)"
+
+  before = Time.now
   finished_outputs = @cloud.output_media_files.find(:all, :select => 'id,account_id,job_id,state,created_at,started_at,updated_at,finished_at,times,low_priority,test,cached_queue_time,cached_total_time,estimated_transcode_load', :conditions => ["finished_at >= ? and finished_at <= ? and created_at < ? and state != 'cancelled'", @start_time, @end_time + 3.hours, @end_time])
-  running_outputs.delete_if { |r| finished_outputs.detect { |f| f.id == r.id } }
+  puts "  Got finished outputs. (#{Time.now-before} seconds)"
+
+  before = Time.now
+  in_finished_set = {}
+  finished_outputs.each { |f| in_finished_set[f.id] = true }
+  running_outputs.delete_if { |r| in_finished_set[r.id] }
   @outputs = running_outputs + finished_outputs
+  puts "  Combined outputs. (#{Time.now-before} seconds)"
 end
 
-puts "Queries finished."
+puts "#{Time.now} Queries finished."
 
-
+before = Time.now
 @worker_time_data = []
 @workers.each do |worker|
   next unless worker.instance_id.present? # Filter out bad calls to amazon.
@@ -144,8 +168,9 @@ puts "Queries finished."
 
 end
 @worker_time_data = @worker_time_data.sort_by { |d| d[:time] }
-puts "Loaded worker data..."
+puts "Loaded worker data... (#{Time.now-before} seconds)"
 
+before = Time.now
 # @input_total_times = {}
 @input_finish_times = {} # By job ID.
 @input_time_data = []
@@ -162,13 +187,15 @@ puts "Loaded worker data..."
   # @input_total_times[input.id] = input.total_time rescue nil
 end
 @input_time_data = @input_time_data.sort_by { |d| d[:time] }
-puts "Loaded input data..."
+puts "Loaded input data... (#{Time.now-before} seconds)"
 
+before = Time.now
 @output_time_data = []
 @outputs.each do |output|
   next if output.state == 'no_input'
+  next if output.state == 'skipped'
   next unless output.finished_at || ['ready','processing','uploading'].include?(output.state)
-  next if EXCLUDE_LOW_PRIORITY && output.low_priority
+  # next if EXCLUDE_LOW_PRIORITY && output.low_priority
   next if EXCLUDE_TEST_JOBS && output.test?
 
   # Will figure this out later too.
@@ -205,7 +232,7 @@ puts "Loaded input data..."
   @output_time_data << { :type => :finished, :time => (output.finished_at || Time.now + 1.year).to_i, :load => load, :low_priority => output.low_priority }
 end
 @output_time_data = @output_time_data.sort_by { |d| d[:time] }
-puts "Loaded output data..."
+puts "Loaded output data... (#{Time.now-before} seconds)"
 
 puts "Stats Collected: #{@worker_time_data.length} worker entries, #{@input_time_data.length} input entries, #{@output_time_data.length} output entries"
 
@@ -251,6 +278,7 @@ END_HTML
 
   puts "Analyzing..."
   ############# SET UP WORKER DATA ##############
+  before = Time.now
   prev_point = 0
   @worker_time_data.each do |data|
     data_type = data[:type]
@@ -335,9 +363,10 @@ END_HTML
       @data_points[:bad_worker_output_capacity][point_loc] -= data[:output_capacity]
     end
   end
-  puts "  Worker analysis done."
+  puts "  Worker analysis done. (#{Time.now-before} seconds)"
 
   ############# SET UP INPUTS DATA ##############
+  before = Time.now
   prev_point = 0
   queued_subtractions = 0
   queued_low_priority_subtractions = 0
@@ -387,9 +416,10 @@ END_HTML
       queued_low_priority_subtractions += 1
     end
   end
-  puts "  Input analysis done."
+  puts "  Input analysis done. (#{Time.now-before} seconds)"
 
   ############# SET UP OUPUTS DATA ##############
+  before = Time.now
   prev_point = 0
   queued_subtractions = 0
   queued_load_subtractions = 0
@@ -449,7 +479,7 @@ END_HTML
       queued_low_priority_load_subtractions += data[:load]
     end
   end
-  puts "  Output analysis done."
+  puts "  Output analysis done. (#{Time.now-before} seconds)"
 
   # ############# SCALE DOWN OUTPUT LOAD ###########
   # max_outputs = [
@@ -471,6 +501,7 @@ END_HTML
   # end
   # puts "  Scaled results."
 
+  before = Time.now
   puts "Building output..."
   DATA_POINTS.times do |p|
     if DURATION <= 1.hour
@@ -487,7 +518,7 @@ END_HTML
     end
     f.puts "  ['%s', %s]," % [time, values.join(',')]
   end
-  puts "Done."
+  puts "Done. (#{Time.now-before} seconds)"
   
   f.puts "]);"
   f.puts "var chart = new google.visualization.LineChart(document.getElementById('chart_div'));"
@@ -518,3 +549,4 @@ f.puts <<END_HTML
 END_HTML
 
 f.close
+
