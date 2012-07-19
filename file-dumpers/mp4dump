@@ -448,7 +448,7 @@ end
 class HdlrBox < Box
   handles 'hdlr', 'Handler Description'
 
-  attr_accessor :version, :flags, :handler_type, :name
+  attr_accessor :version, :flags, :handler_type, :handler_manufacturer, :name, :handler_qt_type
 
   def initialize(*args)
     @version = nil
@@ -458,9 +458,9 @@ class HdlrBox < Box
 
   def read_data(stream)
     @version,@flags = stream.ui8, stream.ui24
-    reserved1 = stream.ui32
+    @handler_qt_type = stream.fourcc
     @handler_type = stream.fourcc
-    reserved2_1 = stream.ui32
+    @handler_manufacturer = stream.fourcc
     reserved2_2 = stream.ui32
     reserved2_3 = stream.ui32
     if @data_size > 24
@@ -470,8 +470,16 @@ class HdlrBox < Box
   end
 
   def print_extra_info(prefix = '')
+    if @handler_qt_type[0] > 0
+      print prefix
+      cputs "Handler QuickTime Type: #{@handler_qt_type}", :dark_gray
+    end
     print prefix
     cputs "Handler Type: #{@handler_type}", :dark_gray
+    if @handler_manufacturer[0] > 0
+      print prefix
+      cputs "Handler Manufacturer: #{@handler_manufacturer}", :dark_gray
+    end
     if @name
       print prefix
       cputs "Name: #{@name}", :dark_gray
@@ -1236,11 +1244,11 @@ class IlstDataBox < SubBox
         if name_atom.nil? || name_atom.value == 'iTunSMPB'
           values = @value.strip.split
           print prefix
-          cputs "Priming:   #{values[1].to_i(15)}", :dark_gray
+          cputs "Priming:   #{values[1].to_i(16)}", :dark_gray
           print prefix
-          cputs "Remainder: #{values[2].to_i(15)}", :dark_gray
+          cputs "Remainder: #{values[2].to_i(16)}", :dark_gray
           print prefix
-          cputs "Samples:   #{values[3].to_i(15)}", :dark_gray
+          cputs "Samples:   #{values[3].to_i(16)}", :dark_gray
         end
       end
     end
