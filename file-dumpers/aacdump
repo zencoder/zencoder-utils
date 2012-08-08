@@ -178,6 +178,7 @@ class AacFrameDecoder
   ESC_HCB = 11
   QUAD_LEN = 4
   PAIR_LEN = 2
+  NOISE_HCB = 13
   INTENSITY_HCB2 = 14
   INTENSITY_HCB = 15
   ESC_FLAG = 16
@@ -377,6 +378,113 @@ class AacFrameDecoder
     0x79 => true
   }
 
+  SWB_OFFSET_LONG_WINDOW = {}
+
+  SWB_OFFSET_LONG_WINDOW[24000] = {
+     0 => 0,
+     1 => 4,
+     2 => 8,
+     3 => 12,
+     4 => 16,
+     5 => 20,
+     6 => 24,
+     7 => 28,
+     8 => 32,
+     9 => 36,
+     10 => 40,
+     11 => 44,
+     12 => 52,
+     13 => 60,
+     14 => 68,
+     15 => 76,
+     16 => 84,
+     17 => 92,
+     18 => 100,
+     19 => 108,
+     20 => 116,
+     21 => 124,
+     22 => 136,
+     24 => 160,
+     25 => 172,
+     26 => 188,
+     27 => 204,
+     28 => 220,
+     29 => 240,
+     30 => 260,
+     31 => 284,
+     32 => 308,
+     33 => 336,
+     34 => 364,
+     35 => 396,
+     36 => 432,
+     37 => 468,
+     38 => 508,
+     39 => 552,
+     40 => 600,
+     41 => 652,
+     42 => 704,
+     43 => 768,
+     44 => 832,
+     45 => 896,
+     46 => 960
+  }
+  SWB_OFFSET_LONG_WINDOW[24000].default = 1204
+  
+  SWB_OFFSET_LONG_WINDOW[44100] = {
+     0 => 0,
+     1 => 4,
+     2 => 8,
+     3 => 12,
+     4 => 16,
+     5 => 20,
+     6 => 24,
+     7 => 28,
+     8 => 32,
+     9 => 36,
+    10 => 40,
+    11 => 48,
+    12 => 56,
+    13 => 64,
+    14 => 72,
+    15 => 80,
+    16 => 88,
+    17 => 96,
+    18 => 108,
+    19 => 120,
+    20 => 132,
+    21 => 144,
+    22 => 160,
+    23 => 176,
+    25 => 216,
+    26 => 240,
+    27 => 264,
+    28 => 292,
+    29 => 320,
+    30 => 352,
+    31 => 384,
+    32 => 416,
+    33 => 448,
+    34 => 480,
+    35 => 512,
+    36 => 544,
+    37 => 576,
+    38 => 608,
+    39 => 640,
+    40 => 672,
+    41 => 704,
+    42 => 736,
+    43 => 768,
+    44 => 800,
+    45 => 832,
+    46 => 864,
+    47 => 896,
+    48 => 928
+  }
+  SWB_OFFSET_LONG_WINDOW[44100].default = 1024
+
+  SWB_OFFSET_LONG_WINDOW[48000] = SWB_OFFSET_LONG_WINDOW[44100]
+    
+
   def initialize(frame_data, num_blocks, sample_rate, protection_absent)
     @data = Bitstream.new(frame_data)
     @num_blocks = num_blocks
@@ -447,7 +555,7 @@ class AacFrameDecoder
     end
 
     window_group_length = []
-    sect_sfb_offset = []
+    @sect_sfb_offset = []
     swb_offset = []
     
     ics_result = {}
@@ -465,8 +573,8 @@ class AacFrameDecoder
       # preparation of sect_sfb_offset for long blocks
       # also copy the last value!
       (max_sfb+1).times do |i|
-        # sect_sfb_offset[0] ||= []
-        # sect_sfb_offset[0][i] = swb_offset_long_window[@sampling_freq_index][i];
+        @sect_sfb_offset[0] ||= []
+        @sect_sfb_offset[0][i] = SWB_OFFSET_LONG_WINDOW[@sample_rate][i];
         # swb_offset[i] = swb_offset_long_window[@sampling_freq_index][i];
       end
     when EIGHT_SHORT_SEQUENCE:
@@ -492,10 +600,10 @@ class AacFrameDecoder
         max_sfb.times do |i|
           width = swb_offset_short_window[@sampling_freq_index][i+1] - swb_offset_short_window[@sampling_freq_index][i];
           width *= window_group_length[g];
-          sect_sfb_offset[g][sect_sfb += 1] = offset;
+          @sect_sfb_offset[g][sect_sfb += 1] = offset;
           offset += width;
         end
-        sect_sfb_offset[g][sect_sfb] = offset;
+        @sect_sfb_offset[g][sect_sfb] = offset;
       end
     end
 
@@ -627,37 +735,37 @@ class AacFrameDecoder
       sect_len_incr_bitcount = 5
     end
 
-    sect_cb = []
-    sect_start = []
-    sect_end = []
+    @sect_cb = []
+    @sect_start = []
+    @sect_end = []
     @sfb_cb = []
-    num_sec = []
+    @num_sec = []
     
     @ics[:num_window_groups].times do |g|
       k = 0
       i = 0
       while k < @ics[:max_sfb]
-        sect_cb[g] ||= []
-        sect_cb[g][i] = @data.getbits(4)
+        @sect_cb[g] ||= []
+        @sect_cb[g][i] = @data.getbits(4)
         sect_len = 0
         while (sect_len_incr = @data.getbits(sect_len_incr_bitcount)) == sect_esc_val
           sect_len += sect_esc_val
         end
         sect_len += sect_len_incr
 
-        sect_start[g] ||= []
-        sect_end[g] ||= []
-        sect_start[g][i] = k
-        sect_end[g][i] = k + sect_len
+        @sect_start[g] ||= []
+        @sect_end[g] ||= []
+        @sect_start[g][i] = k
+        @sect_end[g][i] = k + sect_len
 
         @sfb_cb[g] ||= []
         k.upto(k+sect_len) do |sfb|
-          @sfb_cb[g][sfb] = sect_cb[g][i]
+          @sfb_cb[g][sfb] = @sect_cb[g][i]
         end
         k += sect_len
         i += 1
       end
-      num_sec[g] = i
+      @num_sec[g] = i
     end
   end
 
@@ -674,6 +782,181 @@ class AacFrameDecoder
     end
   end
 
+  def pulse_data
+    number_pulse = @data.getbits(2)
+    pulse_start_sfb = @data.getbits(6)
+
+    pulse_offset = []
+    pulse_amp = []
+    number_pulse.times do |i|
+      pulse_offset << @data.getbits(5)
+      pulse_amp << @data.getbits(4)
+    end
+  end
+
+  def tns_data
+    if @ics && @ics[:window_sequence] == EIGHT_SHORT_SEQUENCE
+      n_filt_bits = 1
+      length_bits = 4
+      order_bits = 3
+    else
+      n_filt_bits = 2
+      length_bits = 6
+      order_bits = 5
+    end
+
+    n_filt = []
+    length = []
+    order = []
+    coef_compress = []
+    direction = []
+    coef = []
+    coef_res = []
+    @ics[:num_windows].times do |w|
+      n_filt[w] = @data.getbits(n_filt_bits)
+      if n_filt[w] > 0
+        coef_res[w] = @data.getbits(1)
+      end
+      length[w] = []
+      order[w] = []
+      direction[w] = []
+      coef_compress[w] = []
+      coef[w] = []
+      n_filt[w].times do |filt|
+        length[w][filt] = @data.getbits(length_bits)
+        order[w][filt] = @data.getbits(order_bits)
+        if order[w][filt] > 0
+          direction[w][filt] = @data.getbits(1)
+          coef_compress[w][filt] = @data.getbits(1)
+          if coef_compress[w][filt] == 1
+            # coef MSB is omitted, so coef len is 1
+            coef_len = 1
+          else
+            # coef MSB is not omitted, so coef len is 2
+            coef_len = 2
+          end
+          coef[w][filt] = []
+          order[w][filt].times do |i|
+            coef[w][filt][i] = @data.getbits(coef_len)
+          end
+        end
+      end
+    end
+  end
+
+  def gain_control_data
+    max_band = @data.getbits(2)
+    window_sequence = @ics[:window_sequence]
+    
+    adjust_num = []
+    alevcode = []
+    aloccode = []
+
+    if window_sequence == ONLY_LONG_SEQUENCE
+      1.upto(max_band) do |bd|
+        adjust_num[bd] = []
+        alevcode[bd] = []
+        aloccode[bd] = []
+        1.times do |wd|
+          adjust_num[bd][wd] = @data.getbits(3)
+          alevcode[bd][wd] = []
+          aloccode[bd][wd] = []
+          adjust_num[bd][wd].times do |ad|
+            alevcode[bd][wd][ad] = @data.getbits(4)
+            aloccode[bd][wd][ad] = @data.getbits(5)
+          end
+        end
+      end
+    elsif window_sequence == LONG_START_SEQUENCE
+      1.upto(max_band) do |bd|
+        adjust_num[bd] = []
+        alevcode[bd] = []
+        aloccode[bd] = []
+        2.times do |wd|
+          adjust_num[bd][wd] = @data.getbits(3)
+          alevcode[bd][wd] = []
+          aloccode[bd][wd] = []
+          adjust_num[bd][wd].times do |ad|
+            alevcode[bd][wd][ad] = @data.getbits(4)
+            if wd == 0
+              aloccode[bd][wd][ad] = @data.getbits(4)
+            else
+              aloccode[bd][wd][ad] = @data.getbits(2)
+            end
+          end
+        end
+      end
+    elsif window_sequence == EIGHT_SHORT_SEQUENCE
+      1.upto(max_band) do |bd|
+        adjust_num[bd] = []
+        alevcode[bd] = []
+        aloccode[bd] = []
+        8.times do |wd|
+          adjust_num[bd][wd] = @data.getbits(3)
+          alevcode[bd][wd] = []
+          aloccode[bd][wd] = []
+          adjust_num[bd][wd].times do |ad|
+            alevcode[bd][wd][ad] = @data.getbits(4)
+            aloccode[bd][wd][ad] = @data.getbits(2)
+          end
+        end
+      end
+    elsif window_sequence == LONG_STOP_SEQUENCE
+      1.upto(max_band) do |bd|
+        adjust_num[bd] = []
+        alevcode[bd] = []
+        aloccode[bd] = []
+        2.times do |wd|
+          adjust_num[bd][wd] = @data.getbits(3)
+          alevcode[bd][wd] = []
+          aloccode[bd][wd] = []
+          adjust_num[bd][wd].times do |ad|
+            alevcode[bd][wd][ad] = @data.getbits(4)
+            if wd == 0
+              aloccode[bd][wd][ad] = @data.getbits(4)
+            else
+              aloccode[bd][wd][ad] = @data.getbits(5)
+            end
+          end
+        end
+      end
+    end
+  end
+
+  def spectral_data
+    @ics[:num_window_groups].times do |g|
+      @num_sec[g].times do |i|
+        if @sect_cb[g][i] != ZERO_HCB && @sect_cb[g][i] != NOISE_HCB && @sect_cb[g][i] != INTENSITY_HCB && @sect_cb[g][i] != INTENSITY_HCB2
+          k = @sect_sfb_offset[g][@sect_start[g][i]]
+          while k < @sect_sfb_offset[g][@sect_end[g][i]]
+            if @sect_cb[g][i] < FIRST_PAIR_HCB
+              puts "CODEBOOK: #{@sect_cb[g][i]}"
+              # hcod[@sect_cb[g][i]][w][x][y][z] = @data.vlclbf
+              # if (unsigned_cb[@sect_cb[g][i]])
+              #   quad_sign_bits = @data.bslbf
+              # end
+              k += QUAD_LEN
+            else
+              puts "CODEBOOK: #{@sect_cb[g][i]}"
+              # hcod[@sect_cb[g][i]][y][z] = @data.vlclbf
+              # if unsigned_cb[@sect_cb[g][i]]
+              #   pair_sign_bits = @data.bslbf
+              # end
+              k += PAIR_LEN
+              # if @sect_cb[g][i] == ESC_HCB
+              #   if y == ESC_FLAG
+              #     hcod_esc_y = @data.vlclbf
+              #   end
+              #   if z == ESC_FLAG
+              #     hcod_esc_z = @data.vlclbf
+              #   end
+              # end
+            end
+          end
+        end
+      end
+    end
+  end
 end
 
 # Check for verbose mode first.
