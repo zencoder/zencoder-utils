@@ -1061,6 +1061,70 @@ class StssBox < Box
 
 end
 
+class VmhdBox < Box
+  handles 'vmhd', 'Video Media Info Header'
+
+  attr_accessor :version, :flags, :graphics_mode, :color
+
+  def initialize(*args)
+    @version = nil
+    @flags = nil
+    @graphics_mode = nil
+    @color = nil
+    super
+  end
+
+  def read_data(stream)
+    @version,@flags = stream.ui8, stream.ui24
+    @graphics_mode = stream.ui16
+    @color = stream.ui24
+  end
+
+  def mode_name(mode)
+    {
+      0x0000 => 'Copy',
+      0x0040 => 'Dither Copy',
+      0x0100 => 'Straight Alpha',
+      0x0103 => 'Composition Dither Copy',
+      0x0020 => 'Blend',
+      0x0101 => 'Premultiplied White Alpha',
+      0x0102 => 'Premultiplied Black Alpha',
+      0x0024 => 'Transparent',
+      0x0104 => 'Alpha Blend'
+    }[mode] || 'Unknown'
+  end
+
+  def print_extra_info(prefix = '')
+    print prefix
+    cputs "Graphics Mode: #{mode_name(@graphics_mode)}", :dark_gray
+  end
+
+end
+
+class SmhdBox < Box
+  handles 'smhd', 'Sound Media Info Header'
+
+  attr_accessor :version, :flags, :balance
+
+  def initialize(*args)
+    @version = nil
+    @flags = nil
+    @balance = 0.0
+    super
+  end
+
+  def read_data(stream)
+    @version,@flags = stream.ui8, stream.ui24
+    @balance = stream.fixed16
+  end
+
+  def print_extra_info(prefix = '')
+    print prefix
+    cputs ("Balance: %0.3f" % @balance), :dark_gray
+  end
+
+end
+
 class ElstBox < Box
   handles 'elst', 'Edit List'
 
@@ -1103,6 +1167,7 @@ end
 class Mp4aSubBox < SubBoxWithSubBoxes
   handles 'mp4a', 'MP4 Audio Description'
   handles 'sowt', 'SOWT Audio Description'
+  handles 'twos', 'TWOS Audio Description'
   handles 'aace', 'AACE Audio Description'
 
   attr_accessor :channels, :sample_size, :sample_rate
@@ -1319,6 +1384,7 @@ class Mp4vSubBox < SubBoxWithSubBoxes
   handles 'mp4v', 'MP4 Video Description'
   handles 'avc1', 'H264 Video Description'
   handles 'jpeg', 'JPEG Video Description'
+  handles 'hdva', 'HDV Video Description'
 
   attr_accessor :width, :height, :frame_count, :depth
 
@@ -1434,6 +1500,25 @@ class MetaBox < BoxWithChildren
   end
 end
 
+class FielSubBox < SubBox
+  handles 'fiel', 'Field Order'
+
+  attr_reader :count, :order
+
+  def read_header_data(stream)
+    @count = stream.ui8
+    @order = stream.ui8
+  end
+
+  def print_extra_info(prefix = '')
+    if @count.to_i > 0
+      print prefix
+      cputs "Count: #{@count}", :dark_gray
+      print prefix
+      cputs "Order: #{@order}", :dark_gray
+    end
+  end
+end
 class PaspSubBox < SubBox
   handles 'pasp', 'Pixel Aspect Ratio'
 
