@@ -2000,7 +2000,8 @@ class AvccSubBox < SubBox
           video_format = unit.getbits(3)
           video_full_range_flag = unit.getbits(1)
           print prefix+'  '
-          cputs "Video Format: #{video_format}", :dark_gray
+          video_format_descriptions = ['Component','PAL','NTSC','SECAM','MAC','Unspecified video format','Reserved','Reserved']
+          cputs "Video Format: #{video_format_descriptions[video_format] || 'Unknown'}", :dark_gray
           print prefix+'  '
           cputs "Video Full Range Flag: #{video_full_range_flag}", :dark_gray
 
