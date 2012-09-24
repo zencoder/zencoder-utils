@@ -28,6 +28,10 @@ class Bitstream
     getbits_internal(count, false)
   end
 
+  def remaining_bits
+    @data.length * 8 - @bit_offset
+  end
+
   # Return an integer of the next _count_ bits and increment @bit_offset so that
   # subsequent calls will get following bits.
   def getbits(count)
@@ -245,13 +249,14 @@ while more_to_read
   size = input_file.ui24
   timestamp = input_file.ui24
   timestamp_ext = input_file.ui8
+  full_timestamp = timestamp_ext*(2**24) + timestamp
   stream_id = input_file.ui24
   
   kind_name = tag_kinds[kind] || 'unknown'
   
   puts "  Type: #{kind} (#{kind_name})"
   puts "  Size: #{size}"
-  puts "  Time: #{(timestamp_ext*(2**24) + timestamp) / 1000.0}"
+  puts "  Time: #{full_timestamp / 1000.0}"
   puts "  Stream ID: #{stream_id}"
 
   next if size == 0
@@ -266,7 +271,7 @@ while more_to_read
     puts "  Audio rate: #{rate}"
     puts "  Audio bits: #{bits}"
     puts "  Audio channels: #{channels}"
-    
+
     if format == 10
       packet_type = input_file.ui8
       puts "  Audio packet type: #{packet_type} (#{packet_type == 0 ? 'sequence header' : 'raw'})"
@@ -290,6 +295,100 @@ while more_to_read
           
           channel_config = asc.getbits(4)
           puts "    Channel Config: #{mpeg4_channel_configurations[channel_config]}"
+
+          # Check for extension data.
+          extension_object_type = 0
+          sbr_present_flag = 0
+          ps_present_flag = 0
+          extension_sampling_frequency_index = -1
+          extension_sampling_frequency = -1
+          if audio_object_type == 5 || audio_object_type == 29
+            extension_object_type = 5
+            sbr_present_flag = 1
+            ps_present_flag = 1 if audio_object_type == 29
+            extension_sampling_frequency_index = asc.getbits(4)
+            if extension_sampling_frequency_index == 0xf
+              extension_sampling_frequency = asc.getbits(24)
+            else
+              extension_sampling_frequency = mpeg4_audio_frequencies[extension_sampling_frequency_index]
+            end
+            puts "    Extension sampling frequency: #{extension_sampling_frequency}"
+
+            audio_object_type = asc.getbits(5)
+            if audio_object_type == 31
+              audio_object_type = asc.getbits(6) + 32 # Extended object type
+            end
+            puts "    Updated Audio Object Type: #{audio_object_type} - #{mpeg4_audio_object_types[audio_object_type]}"
+            puts "    SBR Present: #{sbr_present_flag}"
+            puts "    PS Present: #{ps_present_flag}"
+            
+          end
+
+          if audio_object_type == 2 # Or a bunch of others
+            # GASpecificConfig
+            frame_length_flag = asc.getbits(1)
+            depends_on_core_coder = asc.getbits(1)
+            if depends_on_core_coder == 1
+              core_coder_delay = asc.getbits(14)
+              puts "    Core coder delay: #{core_coder_delay}"
+            end
+            extension_flag = asc.getbits(1)
+            if channel_config == 0
+              puts "ERROR: Reading channel config from PCE is not currently supported."
+              # Should read program_config_element here.
+            end
+            if audio_object_type == 6 || audio_object_type == 20
+              layer_nr = asc.getbits(3)
+            end
+            if extension_flag == 1
+              if audio_object_type == 22
+                num_of_sub_frame = asc.getbits(5)
+                layer_length = asc.getbits(11)
+              end
+              if [17,19,20.23].include?(audio_object_type)
+                aac_section_data_resilience_flag = asc.getbits(1)
+                aac_scalefactor_data_resilience_flag = asc.getbits(1)
+                aac_spectral_data_resilience_flag = asc.getbits(1)
+              end
+              extension_flag_3 = asc.getbits(1)
+              if extension_flag_3 == 1
+                # Not yet defined!  Yay!
+                puts "ERROR: Undefined version 3 data."
+              end
+            end
+          end
+
+          if extension_object_type != 5 && asc.remaining_bits >= 16
+            sync_extension_type = asc.getbits(11)
+            if sync_extension_type == 0x2b7
+
+              extension_object_type = asc.getbits(5)
+              if extension_object_type == 31
+                extension_object_type = asc.getbits(6) + 32 # Extended object type
+              end
+
+              if extension_object_type == 5
+                sbr_present_flag = asc.getbits(1)
+                if sbr_present_flag == 1
+                  extension_sampling_frequency_index = asc.getbits(4)
+                  if extension_sampling_frequency_index == 0xf
+                    extension_sampling_frequency = asc.getbits(24)
+                  else
+                    extension_sampling_frequency = mpeg4_audio_frequencies[extension_sampling_frequency_index]
+                  end
+                  puts "    Extension sampling frequency: #{extension_sampling_frequency}"
+                  if asc.remaining_bits >= 12
+                    sync_extension_type = asc.getbits(11)
+                    if sync_extension_type == 0x548
+                      ps_present_flag = 1
+                    end
+                  end
+                end
+              end
+            end
+            puts "    SBR Present: #{sbr_present_flag}"
+            puts "    PS Present: #{ps_present_flag}"
+          end
 
         else
           puts "    ERROR: AudioSpecificConfig too small! Assuming stream info is accurate."
@@ -394,6 +493,9 @@ while more_to_read
         composition_time = input_file.si24
         bytes_read += 3
         puts "  Composition Time Offset: %0.3f" % (composition_time / 1000.0)
+        puts "  PTS: %0.3f" % ((full_timestamp + composition_time) / 1000.0)
+      elsif packet_type == 1
+        puts "  PTS: %0.3f" % (full_timestamp / 1000.0)
       end
 
       input_file.read(size - bytes_read)

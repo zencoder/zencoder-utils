@@ -49,7 +49,14 @@ class Box
 
   def self.read(stream, options = {})
     size,kind = stream.ui32,stream.fourcc rescue nil
+
+    # Sometimes metatdata gets confusing, so skip leading zero chunks.
+    while size == 0
+      size = kind.unpack('N').first
+      kind = stream.fourcc
+    end
     return nil if size.nil?
+
     handler = Box::HANDLERS[kind] || Box
     handler.new(stream, kind, size, options)
   end
@@ -133,9 +140,12 @@ class BoxWithChildren < Box
   handles 'udta', 'User Data'
 
   def read_data(stream)
-    while stream.pos < (@base_offset + @size) && (box = Box.read(stream, :parent => self))
+    while stream.pos < (@base_offset + @size - 7) && (box = Box.read(stream, :parent => self))
       @children << box
     end
+
+    remainder = (@base_offset + @size) - stream.pos
+    stream.read(remainder) if remainder > 0
   end
 end
 
@@ -720,10 +730,12 @@ class SttsBox < Box
   end
 
   def lookup_sample_time_in_seconds(sample_number)
-    timescale = find_parent('mdia').first_child('mdhd').timescale rescue nil
-    sample_time = lookup_sample_time(sample_number)
-    if timescale && sample_time
-      sample_time.to_f / timescale
+    @timescale ||= find_parent('mdia').first_child('mdhd').timescale rescue nil
+    if @timescale
+      sample_time = lookup_sample_time(sample_number)
+      if sample_time
+        sample_time.to_f / @timescale
+      end
     end
   end
 
@@ -802,10 +814,38 @@ class CttsBox < Box
     end
     print prefix
     cputs "Entry Count: #{@entry_count}", :dark_gray
+
     if $VERBOSE
+      stts = find_parent('stbl').first_child('stts') rescue nil
+      stts_entries = stts.entries rescue []
+      stts_index = 0
+      stts_sample_count = 0
+      stts_entry = stts_entries[stts_index]
+
       @entries.each do |entry|
-        print prefix
-        cputs "Sample Count: #{entry[:count]}, Offset: #{entry[:offset]}", :dark_gray
+        if stts_entry
+          entry[:count].times do |entry_subitem|
+            dts = stts_entry[:time_offset] + stts_sample_count * stts_entry[:duration]
+            pts = dts + entry[:offset]
+          
+            print prefix
+            if entry_subitem > 0
+              cputs "                 Offset: #{entry[:offset].to_s.rjust(5)}, DTS: #{dts}, PTS: #{pts}, DUR: #{stts_entry[:duration]}", :dark_gray
+            else
+              cputs "Sample Count: #{entry[:count]}, Offset: #{entry[:offset].to_s.rjust(5)}, DTS: #{dts}, PTS: #{pts}, DUR: #{stts_entry[:duration]}", :dark_gray
+            end
+
+            stts_sample_count += 1
+            if stts_sample_count >= stts_entry[:count]
+              stts_index += 1
+              stts_entry = stts_entries[stts_index]
+              stts_sample_count = 0
+            end
+          end
+        else
+          print prefix
+          cputs "Sample Count: #{entry[:count]}, Offset: #{entry[:offset].to_s.rjust(5)}", :dark_gray
+        end
       end
     end
   end
@@ -1423,10 +1463,101 @@ class Mp4vSubBox < SubBoxWithSubBoxes
   end
 end
 
+class Mp4sSubBox < SubBoxWithSubBoxes
+  handles 'mp4s', 'MP4 Stream Description'
+
+  attr_accessor :width, :height
+
+  def read_header_data(stream)
+    reserved1 = @data_stream.si32
+    reserved2 = @data_stream.si16
+    data_ref_index = @data_stream.si16
+  end
+
+end
+
 class EsdsSubBox < SubBox
   handles 'esds', 'Extended Sample Description'
 
   attr_reader :max_bitrate, :bitrate, :audio_type
+
+  MPEG4_AUDIO_OBJECT_TYPES = {
+    0 => "Null",
+    1 => "AAC Main",
+    2 => "AAC LC (Low Complexity)",
+    3 => "AAC SSR (Scalable Sample Rate)",
+    4 => "AAC LTP (Long Term Prediction)",
+    5 => "SBR (Spectral Band Replication)",
+    6 => "AAC Scalable",
+    7 => "TwinVQ",
+    8 => "CELP (Code Excited Linear Prediction)",
+    9 => "HXVC (Harmonic Vector eXcitation Coding)",
+    10 => "Reserved",
+    11 => "Reserved",
+    12 => "TTSI (Text-To-Speech Interface)",
+    13 => "Main Synthesis",
+    14 => "Wavetable Synthesis",
+    15 => "General MIDI",
+    16 => "Algorithmic Synthesis and Audio Effects",
+    17 => "ER (Error Resilient) AAC LC",
+    18 => "Reserved",
+    19 => "ER AAC LTP",
+    20 => "ER AAC Scalable",
+    21 => "ER TwinVQ",
+    22 => "ER BSAC (Bit-Sliced Arithmetic Coding)",
+    23 => "ER AAC LD (Low Delay)",
+    24 => "ER CELP",
+    25 => "ER HVXC",
+    26 => "ER HILN (Harmonic and Individual Lines plus Noise)",
+    27 => "ER Parametric",
+    28 => "SSC (SinuSoidal Coding)",
+    29 => "PS (Parametric Stereo)",
+    30 => "MPEG Surround",
+    31 => "(Escape value)",
+    32 => "Layer-1",
+    33 => "Layer-2",
+    34 => "Layer-3",
+    35 => "DST (Direct Stream Transfer)",
+    36 => "ALS (Audio Lossless)",
+    37 => "SLS (Scalable LosslesS)",
+    38 => "SLS non-core",
+    39 => "ER AAC ELD (Enhanced Low Delay)",
+    40 => "SMR (Symbolic Music Representation) Simple",
+    41 => "SMR Main",
+    42 => "USAC (Unified Speech and Audio Coding) (no SBR)",
+    43 => "SAOC (Spatial Audio Object Coding)",
+    44 => "LD MPEG Surround",
+    45 => "USAC"
+  }
+
+  MPEG4_AUDIO_FREQUENCIES = {
+    0 => "96000",
+    1 => "88200",
+    2 => "64000",
+    3 => "48000",
+    4 => "44100",
+    5 => "32000",
+    6 => "24000",
+    7 => "22050",
+    8 => "16000",
+    9 => "12000",
+    10 => "11025",
+    11 => "8000",
+    12 => "7350",
+    13 => "Reserved",
+    14 => "Reserved"
+  }  
+
+  MPEG4_CHANNEL_CONFIGURATIONS = {
+    0 => "Defined in AOT Specifc Config",
+    1 => "1 channel - Center",
+    2 => "2 channels - Left, Right",
+    3 => "3 channels - Center, Left, Right",
+    4 => "4 channels - C, L, R rear_C",
+    5 => "5 channels - C, L, R rear_L, rear_R",
+    6 => "6 channels - C, L, R rear_L, rear_R, LFE",
+    7 => "8 channels - C, L, R side_L, side_R, rear_L, rear_R, LFE"
+  }
 
   def read_data(stream)
     super
@@ -1442,9 +1573,36 @@ class EsdsSubBox < SubBox
     print prefix
     cputs "Audio Type: #{@audio_type}", :dark_gray
     print prefix
+    cputs "Buffer Size: #{@buffer_size}", :dark_gray
+    print prefix
     cputs "Bitrate: #{@bitrate}", :dark_gray
     print prefix
     cputs "Max Bitrate: #{@max_bitrate}", :dark_gray
+    if @audio_object_type
+      print prefix
+      cputs "Audio Specifc Config:", :dark_gray
+      print prefix
+      cputs "  Audio Object Type: #{@audio_object_type} - #{MPEG4_AUDIO_OBJECT_TYPES[@audio_object_type]}", :dark_gray
+      print prefix
+      cputs "  Sampling Frequency: #{@frequency}", :dark_gray
+      print prefix
+      cputs "  Channel Config: #{MPEG4_CHANNEL_CONFIGURATIONS[@channel_config]}", :dark_gray
+      if @extension_sampling_frequency != -1
+        print prefix
+        cputs "  Extension Sampling Frequency: #{@extension_sampling_frequency}", :dark_gray
+      end
+      print prefix
+      cputs "  SBR Present: #{@sbr_present_flag}", :dark_gray
+      print prefix
+      cputs "  PS Present: #{@ps_present_flag}", :dark_gray
+      if @core_coder_delay
+        print prefix
+        cputs "  Core Coder Delay: #{@core_coder_delay}", :dark_gray
+      end
+      
+
+    end
+    
   end
 
   def parse_tags(data_size = @data_size)
@@ -1461,15 +1619,24 @@ class EsdsSubBox < SubBox
         parse_tags(len - 3)
       when 4 # decoder_config_descr_tag -- the one we want.
         @audio_type = @data_stream.ui8
-        @data_stream.ui32 # Unknown
+        @stream_flags = @data_stream.ui8
+        @buffer_size = @data_stream.ui24
         @max_bitrate = @data_stream.ui32
         @bitrate = @data_stream.ui32
-        if len > 8
+        if len >= 10
+          parse_tags(len - 8)
+        elsif len > 8
           @data_stream.read(len - 8)
         end
-      when 5 # dec_specific_info_tag -- not useful
-        @data_stream.read(len)
-      when 6 # sl_config_descr_tag -- not useful
+      when 5 # dec_specific_info_tag -- The audio specific config and such.
+        @dec_specific_info = @data_stream.read(len)
+
+        # Try decoding if it looks like an audio specific config.
+        if len >= 2
+          decode_asc(@dec_specific_info)
+        end
+
+      when 6 # sl_config_descr_tag -- sync layer config descriptor...  blah.
         @data_stream.read(len)
       else # who knows
         @data_stream.read(len)
@@ -1489,13 +1656,121 @@ class EsdsSubBox < SubBox
   rescue
     0
   end
+
+  def decode_asc(data)
+    asc = Bitstream.new(data)
+    @audio_object_type = asc.getbits(5)
+    if @audio_object_type == 31
+      @audio_object_type = asc.getbits(6) + 32 # Extended object type
+    end
+
+    frequency_index = asc.getbits(4)
+    if frequency_index == 15
+      @frequency = asc.getbits(24) # Extended frequency
+    else
+      @frequency = MPEG4_AUDIO_FREQUENCIES[frequency_index]
+    end
+    
+    @channel_config = asc.getbits(4)
+
+    # Check for extension data.
+    extension_object_type = 0
+    @sbr_present_flag = 0
+    @ps_present_flag = 0
+    extension_sampling_frequency_index = -1
+    @extension_sampling_frequency = -1
+    if @audio_object_type == 5 || @audio_object_type == 29
+      extension_object_type = 5
+      @sbr_present_flag = 1
+      @ps_present_flag = 1 if @audio_object_type == 29
+      extension_sampling_frequency_index = asc.getbits(4)
+      if extension_sampling_frequency_index == 0xf
+        @extension_sampling_frequency = asc.getbits(24)
+      else
+        @extension_sampling_frequency = MPEG4_AUDIO_FREQUENCIES[extension_sampling_frequency_index]
+      end
+
+      @audio_object_type = asc.getbits(5)
+      if @audio_object_type == 31
+        @audio_object_type = asc.getbits(6) + 32 # Extended object type
+      end
+    end
+
+    if @audio_object_type == 2 # Or a bunch of others
+      # GASpecificConfig
+      frame_length_flag = asc.getbits(1)
+      depends_on_core_coder = asc.getbits(1)
+      if depends_on_core_coder == 1
+        @core_coder_delay = asc.getbits(14)
+      end
+      extension_flag = asc.getbits(1)
+      if @channel_config == 0
+        # puts "ERROR: Reading channel config from PCE is not currently supported."
+        # Should read program_config_element here.
+      end
+      if @audio_object_type == 6 || @audio_object_type == 20
+        layer_nr = asc.getbits(3)
+      end
+      if extension_flag == 1
+        if audio_object_type == 22
+          num_of_sub_frame = asc.getbits(5)
+          layer_length = asc.getbits(11)
+        end
+        if [17,19,20.23].include?(audio_object_type)
+          aac_section_data_resilience_flag = asc.getbits(1)
+          aac_scalefactor_data_resilience_flag = asc.getbits(1)
+          aac_spectral_data_resilience_flag = asc.getbits(1)
+        end
+        extension_flag_3 = asc.getbits(1)
+        if extension_flag_3 == 1
+          # Not yet defined!  Yay!
+          # puts "ERROR: Undefined version 3 data."
+        end
+      end
+    end
+
+    if extension_object_type != 5 && asc.remaining_bits >= 16
+      sync_extension_type = asc.getbits(11)
+      if sync_extension_type == 0x2b7
+
+        extension_object_type = asc.getbits(5)
+        if extension_object_type == 31
+          extension_object_type = asc.getbits(6) + 32 # Extended object type
+        end
+
+        if extension_object_type == 5
+          @sbr_present_flag = asc.getbits(1)
+          if @sbr_present_flag == 1
+            extension_sampling_frequency_index = asc.getbits(4)
+            if extension_sampling_frequency_index == 0xf
+              @extension_sampling_frequency = asc.getbits(24)
+            else
+              @extension_sampling_frequency = mpeg4_audio_frequencies[extension_sampling_frequency_index]
+            end
+            if asc.remaining_bits >= 12
+              sync_extension_type = asc.getbits(11)
+              if sync_extension_type == 0x548
+                @ps_present_flag = 1
+              end
+            end
+          end
+        end
+      end
+    end
+  rescue nil
+  end
+
 end
 
 class MetaBox < BoxWithChildren
   handles 'meta', 'Meta Data'
 
   def read_data(stream)
+    # Handle meta entries inside itunes data differently.
+    if find_parent('ilst')
       @version,@flags = stream.ui8,stream.ui24
+    end
+
     super
   end
 end
@@ -1751,7 +2026,7 @@ class AvccSubBox < SubBox
     cputs "NAL Unit Length: #{@nal_unit_length}", :dark_gray
     print prefix
     cputs "Sequence Set Count: #{@sequence_set_count}", :dark_gray
-    print_sps_units(prefix+'  ') if $VERBOSE
+    print_sps_units(prefix+'  ')# if $VERBOSE
     print prefix
     cputs "Picture Set Count: #{@picture_set_count}", :dark_gray
   end
