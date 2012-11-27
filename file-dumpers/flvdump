@@ -77,6 +77,125 @@ class Bitstream
   end
 end
 
+def decode_script_data(data, prefix = '', cur_pos = 0)
+  data_type = data[cur_pos]
+  cur_pos += 1
+    
+  case data_type
+  when 0
+    # DOUBLE
+    value = data[cur_pos,8].unpack('G').first
+    cur_pos += 8
+    puts "#{prefix}DOUBLE: #{value}"
+
+  when 1
+    value = data[cur_pos]
+    cur_pos += 1
+    puts "#{prefix}BOOLEAN: #{value == 0 ? 'false' : 'true'}"
+
+  when 2
+    len = data[cur_pos,2].unpack('n').first
+    cur_pos += 2
+    if len > 0
+      value = data[cur_pos, len]
+      cur_pos += len
+    else
+      value = ''
+    end
+    puts "#{prefix}STRING (#{len}): #{value}"
+
+  when 3
+    puts "#{prefix}Object:"
+    while cur_pos < data.length
+      name_len = data[cur_pos,2].unpack('n').first
+      cur_pos += 2
+      if name_len == 0
+        name = ''
+        if data[cur_pos] == 9
+          # End of array.
+          break
+        end
+      else
+        name = data[cur_pos, name_len]
+      end
+      cur_pos += name_len
+        
+      puts "#{prefix}  #{name}"
+      cur_pos = decode_script_data(data, prefix + '    ', cur_pos)
+
+      break if cur_pos.nil?
+    end
+
+  when 7
+    value = data[cur_pos,2].unpack('n').first
+    cur_pos += 2
+    puts "#{prefix}REFERENCE: #{value}"
+
+  when 11
+    # DATE
+    value = data[cur_pos,8].unpack('G').first    
+    cur_pos += 8
+    local_time_offset = data[cur_pos, 2].unpack('s').first
+    cur_pos += 2
+    puts "#{prefix}DATE: #{value} (ms since Jan 1, 1970, UTC), time offset: #{local_time_offset} (may be wrong-endian!)"
+
+  when 12
+    # LONG STRING
+    len = data[cur_pos,4].unpack('N').first
+    cur_pos += 4
+    if len > 0
+      value = data[cur_pos, len]
+      cur_pos += len
+    else
+      value = ''
+    end
+    puts "#{prefix}LONGSTRING (#{len}): #{value}"
+
+  when 10
+    array_len = data[cur_pos,4].unpack('N').first
+    cur_pos += 4
+    puts "#{prefix}Strict array (length = #{array_len})"
+      
+    array_len.times do |i|
+      puts "#{prefix}  Index #{i}"
+      cur_pos = decode_script_data(data, prefix + '    ', cur_pos)
+
+      break if cur_pos.nil?
+    end
+
+  when 8
+    array_len = data[cur_pos,4].unpack('N').first
+    cur_pos += 4
+    puts "#{prefix}ECMA array (length = #{array_len})"
+      
+    array_len.times do |i|
+      name_len = data[cur_pos,2].unpack('n').first
+      cur_pos += 2
+      if name_len == 0
+        name = ''
+        if data[cur_pos] == 9
+          # End of array.
+          break
+        end
+      else
+        name = data[cur_pos, name_len]
+      end
+      cur_pos += name_len
+        
+      puts "#{prefix}  #{name}"
+      cur_pos = decode_script_data(data, prefix + '    ', cur_pos)
+
+      break if cur_pos.nil?
+    end      
+      
+  else
+    puts "#{prefix}Unsupported data type #{data_type} found!"
+    return nil
+  end
+
+  return cur_pos
+end
+
 
 tag_kinds = {
   8 => 'audio',
@@ -505,23 +624,16 @@ while more_to_read
     end
 
   elsif kind_name == 'script'
-    input_file.ui8 # 1 byte of junk?
-    tag_pos = 1
+    name_tag_type = input_file.ui8
+    puts "  WARNING: Script tag name is not string type!" unless name_tag_type == 2
 
     name_len = input_file.ui16
-    puts "  Script object name length: #{name_len}"
-    tag_pos += 2
-
+    # puts "  Script object name length: #{name_len}"
     name = input_file.read(name_len)
-    tag_pos += name_len
-
     puts "  Script object name: #{name}"
     
-    data_type = input_file.ui8
-    tag_pos += 1
-    puts "  Script object type: #{data_type}"
-    
-    input_file.read(size - tag_pos)
+    subsequent_data = input_file.read(size - (name_len + 3))
+    decode_script_data(subsequent_data, '    ')
   else
     input_file.read(size)
   end

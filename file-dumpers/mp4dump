@@ -1757,7 +1757,8 @@ class EsdsSubBox < SubBox
         end
       end
     end
-  rescue nil
+  rescue
+    nil
   end
 
 end
