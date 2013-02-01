@@ -1179,17 +1179,46 @@ end
 $VERBOSE = false
 $DEBUG = false
 $CHART_AUDIO = false
+$TIME_LIMIT = nil
+$SKIP_TIME = 0.0
 
 error "Please specify a file to chart." unless ARGV.length > 0
 
-if ARGV.first == '-v'
-  $VERBOSE = true
-  ARGV.shift
-end
+while %w(-v -a -t -ss -vbv-maxrate -vbv-bufsize -target-bitrate).include? ARGV.first
+  if ARGV.first == '-v'
+    $VERBOSE = true
+    ARGV.shift
+  end
 
-if ARGV.first == '-a'
-  $CHART_AUDIO = true
-  ARGV.shift
+  if ARGV.first == '-a'
+    $CHART_AUDIO = true
+    ARGV.shift
+  end
+
+  if ARGV.first == '-t'
+    ARGV.shift
+    $TIME_LIMIT = ARGV.shift.to_f
+  end
+
+  if ARGV.first == '-ss'
+    ARGV.shift
+    $SKIP_TIME = ARGV.shift.to_f
+  end
+
+  if ARGV.first == '-vbv-maxrate'
+    ARGV.shift
+    vbv_maxrate = ARGV.shift.to_f
+  end
+
+  if ARGV.first == '-vbv-bufsize'
+    ARGV.shift
+    vbv_bufsize = ARGV.shift.to_f
+  end
+
+  if ARGV.first == '-target-bitrate'
+    ARGV.shift
+    target_bitrate = ARGV.shift.to_f
+  end
 end
 
 input_filename = ARGV.first
@@ -1219,9 +1248,11 @@ timescale = target_track.first_descendant('mdhd').timescale
 stts = target_track.first_descendant('stts')
 stsz = target_track.first_descendant('stsz')
 
+skip_samples = 0
 sample_number = 0
 current_time = 0
 total_size = 0
+time = 0
 
 running_average_durations = [1.0, 2.0, 5]
 running_average_durations << vbv_duration if vbv_duration
@@ -1242,14 +1273,16 @@ frames_info = []
 prev_frame_duration = 0
 point_averages = []
 
+begin
 stts.entries.each do |stts_entry|
+  break if $TIME_LIMIT && time > ($SKIP_TIME + $TIME_LIMIT)
   stts_entry[:count].times do
     time = current_time.to_f / timescale
+    break if $TIME_LIMIT && time > ($SKIP_TIME + $TIME_LIMIT)
+
     size = stsz.entries[sample_number]
     average_values = []
     average_strings = []
-
-    frames_info << { :time => time, :size => size, :duration => stts_entry[:duration], :prev_duration => prev_frame_duration }
 
     fps_so_far = (sample_number + 1) / time if time > 0.01
 
@@ -1268,8 +1301,16 @@ stts.entries.each do |stts_entry|
       average_strings << "W=#{sprintf('%0.1f', duration)}: " + (avg ? sprintf('%0.3f', (avg * fps_so_far) * 0.008) : 'N/A')
     end
 
+    if time < $SKIP_TIME
+      skip_samples += 1
+      sample_number += 1
+      current_time += stts_entry[:duration]
+      next
+    end
+
     puts "#{sprintf('%0.3f', time)} - #{sprintf('%6d',size)} - " + average_strings.join(' - ')
 
+    frames_info << { :time => time, :size => size, :duration => stts_entry[:duration], :prev_duration => prev_frame_duration }
     point_averages << average_values
 
     if (time / POINT_INTERVAL).floor > prev_data_point
@@ -1284,9 +1325,19 @@ stts.entries.each do |stts_entry|
     prev_frame_duration = stts_entry[:duration]
   end
 end
+rescue Interrupt => e
+end
+
+# puts "DATA POINTS"
+# data_points.each do |data_point|
+#   puts data_point.inspect
+# end
 
 total_duration = current_time.to_f / timescale
-total_fps = stsz.entries.length.to_f / total_duration
+# total_fps = stsz.entries.length.to_f / total_duration
+total_fps = (sample_number - skip_samples) / total_duration
+
+# puts "TOTAL FPS: #{total_fps}"
 
 if vbv_maxrate
   bytes_per_second = vbv_maxrate * 1000 / 8
@@ -1335,6 +1386,7 @@ end
 
 
 average_bitrate = (total_size.to_f / total_duration) * 0.008
+puts "Total size: #{total_size}, Total duration: #{total_duration}"
 puts "Average Bitrate: #{sprintf('%0.3f', average_bitrate)} Kbps"
 
 if vbv_duration
