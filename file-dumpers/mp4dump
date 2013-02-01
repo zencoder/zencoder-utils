@@ -263,6 +263,19 @@ class TkhdBox < Box
 
   attr_accessor :flags, :track_id, :duration, :layer, :volume, :width, :height
 
+  MATRIX_DECODER = {
+    # [A, B, C, D] of QT matrix.  If it doesn't match one
+    # of these patterns, it's probably a weird rotation angle or something.
+    [ 1,  0,  0,  1] => { :rotate =>   0, :flip => :none },
+    [ 1,  0,  0, -1] => { :rotate =>   0, :flip => :vertical },
+    [-1,  0,  0, -1] => { :rotate => 180, :flip => :none },
+    [-1,  0,  0,  1] => { :rotate =>   0, :flip => :horizontal },
+    [ 0,  1,  1,  0] => { :rotate =>  90, :flip => :horizontal },
+    [ 0,  1, -1,  0] => { :rotate =>  90, :flip => :none },
+    [ 0, -1, -1,  0] => { :rotate => 270, :flip => :horizontal },
+    [ 0, -1,  1,  0] => { :rotate => 270, :flip => :none }
+  }
+
   def read_data(stream)
     version = stream.ui8
     @flags = stream.ui24
@@ -284,9 +297,50 @@ class TkhdBox < Box
     alt_group = stream.ui16
     @volume = stream.fixed16
     reserved = stream.read(2)
-    matrix = stream.read(36)
+    @matrix = stream.read(36)
     @width = stream.fixed32
     @height = stream.fixed32
+
+    # MATRIX DECODING
+    # -> 4 bytes decimal window geometry matrix value A
+    #    = long fixed point width scale (normal = 1.0)
+    # -> 4 bytes decimal window geometry matrix value B
+    #    = long fixed point width rotate (normal = 0.0)
+    # -> 4 bytes decimal window geometry matrix value U
+    #    = long fixed point width angle (restricted to 0.0)
+    # -> 4 bytes decimal window geometry matrix value C
+    #    = long fixed point height rotate (normal = 0.0)
+    # -> 4 bytes decimal window geometry matrix value D
+    #    = long fixed point height scale (normal = 1.0)
+    # -> 4 bytes decimal window geometry matrix value V
+    #    = long fixed point height angle (restricted to 0.0)
+    # -> 4 bytes decimal window geometry matrix value X
+    #    = long fixed point positon (left = 0.0)
+    # -> 4 bytes decimal window geometry matrix value Y
+    #    = long fixed point positon (top = 0.0)
+    # -> 4 bytes decimal window geometry matrix value W
+    #    = long fixed point divider scale (restricted to 1.0)
+
+    # Decode the 4 matrix positions we care about.
+    @matrix_ABCD = []
+    [0,4,12,16].each do |byte_position|
+      @matrix_ABCD << @matrix[byte_position,4].unpack('cCCC').inject(0) { |s,v| (s<<8) + v }.to_f / 2**16
+    end
+
+    # Simplify to just -1, 0, and 1 representing negative/positive/zero values.
+    @matrix_simplified = @matrix_ABCD.map { |v| (v > 0.01) ? 1 : ((v < -0.01) ? -1 : 0) }
+
+    # If any values are not zero or 1, then it stretches stuff.
+    @matrix_stretches = @matrix_ABCD.any? { |v| ![-1.0, 0.0, 1.0].include?(v) }
+    
+    decoded = MATRIX_DECODER[@matrix_simplified]
+    if decoded
+      @rotation = decoded[:rotate]
+      @flip = decoded[:flip]
+    else
+      @rotation = 'Unknown'
+      @flip = 'Unknown'
+    end
   end
 
   def print_extra_info(prefix = '')
@@ -298,18 +352,33 @@ class TkhdBox < Box
     cputs "Width: #{@width}", :dark_gray
     print prefix
     cputs "Height: #{@height}", :dark_gray
-    print prefix
-    cputs "Enabled: #{(@flags & 1) > 0 ? 'Yes' : 'No'}", :dark_gray
-    print prefix
-    cputs "In Movie: #{(@flags & 2) > 0 ? 'Yes' : 'No'}", :dark_gray
-    print prefix
-    cputs "In Preview: #{(@flags & 4) > 0 ? 'Yes' : 'No'}", :dark_gray
-    print prefix
-    cputs "In Poster: #{(@flags & 8) > 0 ? 'Yes' : 'No'}", :dark_gray
-    print prefix
-    cputs "Layer: #{@layer}", :dark_gray
-    print prefix
-    cputs "Volume: #{@volume}", :dark_gray
+    if @rotation != 0
+      print prefix
+      cputs "Rotate: #{@rotation}", :dark_gray
+    end
+    if @flip != :none
+      print prefix
+      cputs "Flip: #{@flip}", :dark_gray
+    end
+    if @matrix_stretches
+      print prefix
+      cputs "Matrix stretches non-uniformly!", :yellow
+    end
+    
+    if $VERBOSE
+      print prefix
+      cputs "Enabled: #{(@flags & 1) > 0 ? 'Yes' : 'No'}", :dark_gray
+      print prefix
+      cputs "In Movie: #{(@flags & 2) > 0 ? 'Yes' : 'No'}", :dark_gray
+      print prefix
+      cputs "In Preview: #{(@flags & 4) > 0 ? 'Yes' : 'No'}", :dark_gray
+      print prefix
+      cputs "In Poster: #{(@flags & 8) > 0 ? 'Yes' : 'No'}", :dark_gray
+      print prefix
+      cputs "Layer: #{@layer}", :dark_gray
+      print prefix
+      cputs "Volume: #{@volume}", :dark_gray
+    end
   end
 end
 
