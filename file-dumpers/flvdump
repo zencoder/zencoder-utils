@@ -313,6 +313,8 @@ mpeg4_channel_configurations = {
   7 => "8 channels: C, L, R side_L, side_R, rear_L, rear_R, LFE"
 }
 
+expect_ffmpeg_trailing_bytes = false
+
 error "Please specify a file to inspect." unless ARGV.length > 0
 
 input_filename = ARGV.first
@@ -352,7 +354,7 @@ more_to_read = true
 while more_to_read
 
   prev_tag_size = input_file.ui32
-  
+
   if input_file.eof?
     puts "LASTTAG:"
     puts "  Prev tag size: #{prev_tag_size}"
@@ -361,18 +363,44 @@ while more_to_read
     next
   end
 
-  puts "TAG: (offset #{input_file.pos})"
-  puts "  Prev tag size: #{prev_tag_size}"
-  
   kind = input_file.ui8
   size = input_file.ui24
   timestamp = input_file.ui24
   timestamp_ext = input_file.ui8
   full_timestamp = timestamp_ext*(2**24) + timestamp
   stream_id = input_file.ui24
-  
+
   kind_name = tag_kinds[kind] || 'unknown'
-  
+
+  if expect_ffmpeg_trailing_bytes
+    expect_ffmpeg_trailing_bytes = false
+
+    if kind == 0
+      puts "LASTTAG:"
+      puts "  Prev tag size: #{prev_tag_size}"
+
+      puts "FFMPEG TRAILING VALUES:"
+      duration_double = (size << 40) + (timestamp << 16) + (timestamp_ext << 8) + (stream_id >> 16)
+      puts "  Duration: %0.4f"% [duration_double >> 32, duration_double & (2**32-1)].pack('NN').unpack('G').first
+
+      size_double = ((stream_id & 0xff) << 56) + (input_file.ui32 << 24) + input_file.ui24
+
+      puts "  Size: %0.4f"% [size_double >> 32, size_double & (2**32-1)].pack('NN').unpack('G').first
+
+      # Should now be the end of the file.  But if it's not, at least give a warning.
+      if input_file.eof?
+        more_to_read = false
+      else
+        puts
+        puts "UNKNOWN DATA FOLLOWING"
+      end
+
+      next
+    end
+  end
+
+  puts "TAG: (offset #{input_file.pos})"
+  puts "  Prev tag size: #{prev_tag_size}"  
   puts "  Type: #{kind} (#{kind_name})"
   puts "  Size: #{size}"
   puts "  Time: #{full_timestamp / 1000.0}"
@@ -615,6 +643,9 @@ while more_to_read
         puts "  PTS: %0.3f" % ((full_timestamp + composition_time) / 1000.0)
       elsif packet_type == 1
         puts "  PTS: %0.3f" % (full_timestamp / 1000.0)
+      elsif packet_type == 2
+        # End of Sequence... Might have ffmpeg junk come next
+        expect_ffmpeg_trailing_bytes = true
       end
 
       input_file.read(size - bytes_read)
