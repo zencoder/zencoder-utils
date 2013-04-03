@@ -268,12 +268,12 @@ class TkhdBox < Box
     # of these patterns, it's probably a weird rotation angle or something.
     [ 1,  0,  0,  1] => { :rotate =>   0, :flip => :none },
     [ 1,  0,  0, -1] => { :rotate =>   0, :flip => :vertical },
-    [-1,  0,  0, -1] => { :rotate => 180, :flip => :none },
-    [-1,  0,  0,  1] => { :rotate =>   0, :flip => :horizontal },
-    [ 0,  1,  1,  0] => { :rotate =>  90, :flip => :horizontal },
     [ 0,  1, -1,  0] => { :rotate =>  90, :flip => :none },
-    [ 0, -1, -1,  0] => { :rotate => 270, :flip => :horizontal },
-    [ 0, -1,  1,  0] => { :rotate => 270, :flip => :none }
+    [ 0,  1,  1,  0] => { :rotate =>  90, :flip => :horizontal },
+    [-1,  0,  0, -1] => { :rotate => 180, :flip => :none },
+    [-1,  0,  0,  1] => { :rotate => 180, :flip => :vertical }, # Equivalent to just a horizontal flip.
+    [ 0, -1,  1,  0] => { :rotate => 270, :flip => :none },
+    [ 0, -1, -1,  0] => { :rotate => 270, :flip => :horizontal }
   }
 
   def read_data(stream)
@@ -320,6 +320,9 @@ class TkhdBox < Box
     #    = long fixed point positon (top = 0.0)
     # -> 4 bytes decimal window geometry matrix value W
     #    = long fixed point divider scale (restricted to 1.0)
+
+    # Matrix rotation = atan2(b, a)*180/3.14159
+    # Vertical flip before rotate unless (atan2(d, c)*180/3.14159 - 90) is equal to rotation.  (beware float math)
 
     # Decode the 4 matrix positions we care about.
     @matrix_ABCD = []
