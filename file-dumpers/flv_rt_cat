@@ -6,7 +6,7 @@
 
 # Usage: flv_rt_cat [-q] flv_file > new_file.flv
 #
-# Reads the input FLV file, and writes its tags to STDOUT, after delaying enoug
+# Reads the input FLV file, and writes its tags to STDOUT, after delaying enough
 # that the elapsed time so far is at least equal to the timestamp of the tag.
 # It will also write normal "flv dump" info to STDERR, unless -q is specified.
 
