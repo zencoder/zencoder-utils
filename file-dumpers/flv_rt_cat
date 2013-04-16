@@ -1,0 +1,719 @@
+#!/usr/bin/env ruby
+
+#
+# FLV Realtime Cat Tool
+#
+
+# Usage: flv_rt_cat [-q] flv_file > new_file.flv
+#
+# Reads the input FLV file, and writes its tags to STDOUT, after delaying enoug
+# that the elapsed time so far is at least equal to the timestamp of the tag.
+# It will also write normal "flv dump" info to STDERR, unless -q is specified.
+
+
+$quiet_mode = false
+def puts_info(stuff = nil)
+  STDERR.puts(stuff) unless $quiet_mode
+end
+
+def error(msg); STDERR.puts msg; exit; end
+
+class IO
+  def ui8; read(1).unpack('C').first; end
+  def ui16; read(2).unpack('n').first; end
+  def ui32; read(4).unpack('N').first; end
+  def ui24; ("\000" + read(3)).unpack('N').first; end
+  def si24; v = ui24; v >= (2**23) ? v-(2**24) : v; end
+  
+  alias_method :__real_read, :read
+
+  def read(amount)
+    result = __real_read(amount)
+    @data_buffer ||= ''
+    @data_buffer << result.to_s
+    result
+  end
+
+  def buffer_flush
+    data = @data_buffer || ''
+    @data_buffer = ''
+    data
+  end
+end
+
+class Bitstream
+  attr_accessor :bit_offset
+  
+  def initialize(data_string, starting_byte_offset = 0)
+    @data = data_string
+    @bit_offset = 0
+    @pos = starting_byte_offset
+  end
+
+  def nextbits(count)
+    raise "nextbits of more than 16 not implemented" if count > 16
+    getbits_internal(count, false)
+  end
+
+  def remaining_bits
+    @data.length * 8 - @bit_offset
+  end
+
+  # Return an integer of the next _count_ bits and increment @bit_offset so that
+  # subsequent calls will get following bits.
+  def getbits(count)
+    value = 0
+    while count > 16
+      value += (getbits_internal(16) << 16)
+      count -= 16
+    end
+    value += getbits_internal(count)
+  end
+  
+  # Do getbits, with up to 16 bits.
+  def getbits_internal(count, increment_position = true)
+    return 0 if count > 16 || count < 1
+    byte = @bit_offset / 8
+    bit  = @bit_offset % 8
+    val = (@data[@pos + byte].to_i << 16) + (@data[@pos + byte + 1].to_i << 8) + @data[@pos + byte + 2].to_i
+    val = (val << bit) & 16777215
+    val = val >> (24 - count)
+
+    @bit_offset += count if increment_position
+    return val
+  end
+  
+  def append(data_string)
+    @data << data_string
+  end
+  
+  # Remove any data that we've moved past already, so we don't build up too much in memory.
+  def pop
+    byte = @bit_offset / 8
+    bit = @bit_offset % 8
+    
+    @pos += byte
+    @bit_offset = bit
+    
+    if @pos > 0
+      @data = @data[@pos..-1]
+      @pos = 0
+    end
+    
+    true
+  end
+end
+
+def decode_script_data(data, prefix = '', cur_pos = 0)
+  data_type = data[cur_pos]
+  cur_pos += 1
+    
+  case data_type
+  when 0
+    # DOUBLE
+    value = data[cur_pos,8].unpack('G').first
+    cur_pos += 8
+    puts_info "#{prefix}DOUBLE: #{value}"
+
+  when 1
+    value = data[cur_pos]
+    cur_pos += 1
+    puts_info "#{prefix}BOOLEAN: #{value == 0 ? 'false' : 'true'}"
+
+  when 2
+    len = data[cur_pos,2].unpack('n').first
+    cur_pos += 2
+    if len > 0
+      value = data[cur_pos, len]
+      cur_pos += len
+    else
+      value = ''
+    end
+    puts_info "#{prefix}STRING (#{len}): #{value}"
+
+  when 3
+    puts_info "#{prefix}Object:"
+    while cur_pos < data.length
+      name_len = data[cur_pos,2].unpack('n').first
+      cur_pos += 2
+      if name_len == 0
+        name = ''
+        if data[cur_pos] == 9
+          # End of array.
+          break
+        end
+      else
+        name = data[cur_pos, name_len]
+      end
+      cur_pos += name_len
+        
+      puts_info "#{prefix}  #{name}"
+      cur_pos = decode_script_data(data, prefix + '    ', cur_pos)
+
+      break if cur_pos.nil?
+    end
+
+  when 7
+    value = data[cur_pos,2].unpack('n').first
+    cur_pos += 2
+    puts_info "#{prefix}REFERENCE: #{value}"
+
+  when 11
+    # DATE
+    value = data[cur_pos,8].unpack('G').first    
+    cur_pos += 8
+    local_time_offset = data[cur_pos, 2].unpack('s').first
+    cur_pos += 2
+    puts_info "#{prefix}DATE: #{value} (ms since Jan 1, 1970, UTC), time offset: #{local_time_offset} (may be wrong-endian!)"
+
+  when 12
+    # LONG STRING
+    len = data[cur_pos,4].unpack('N').first
+    cur_pos += 4
+    if len > 0
+      value = data[cur_pos, len]
+      cur_pos += len
+    else
+      value = ''
+    end
+    puts_info "#{prefix}LONGSTRING (#{len}): #{value}"
+
+  when 10
+    array_len = data[cur_pos,4].unpack('N').first
+    cur_pos += 4
+    puts_info "#{prefix}Strict array (length = #{array_len})"
+      
+    array_len.times do |i|
+      puts_info "#{prefix}  Index #{i}"
+      cur_pos = decode_script_data(data, prefix + '    ', cur_pos)
+
+      break if cur_pos.nil?
+    end
+
+  when 8
+    array_len = data[cur_pos,4].unpack('N').first
+    cur_pos += 4
+    puts_info "#{prefix}ECMA array (length = #{array_len})"
+      
+    array_len.times do |i|
+      name_len = data[cur_pos,2].unpack('n').first
+      cur_pos += 2
+      if name_len == 0
+        name = ''
+        if data[cur_pos] == 9
+          # End of array.
+          break
+        end
+      else
+        name = data[cur_pos, name_len]
+      end
+      cur_pos += name_len
+        
+      puts_info "#{prefix}  #{name}"
+      cur_pos = decode_script_data(data, prefix + '    ', cur_pos)
+
+      break if cur_pos.nil?
+    end      
+      
+  else
+    puts_info "#{prefix}Unsupported data type #{data_type} found!"
+    return nil
+  end
+
+  return cur_pos
+end
+
+
+tag_kinds = {
+  8 => 'audio',
+  9 => 'video',
+  18 => 'script'
+}
+audio_formats = {
+  0 => 'pcm, platform endian',
+  1 => 'adpcm',
+  2 => 'mp3',
+  3 => 'pcm, little endian',
+  4 => 'nellymoser 16-kHz',
+  5 => 'nellymoser 8-kHz',
+  6 => 'nellymoser',
+  7 => 'G.711 a-law',
+  8 => 'G.711 mu-law',
+  9 => 'reserved',
+  10 => 'aac',
+  11 => 'speex',
+  14 => 'mp3 8-kHz',
+  15 => 'device-specific'
+}
+video_frame_types = {
+  1 => 'keyframe',
+  2 => 'inter frame',
+  3 => 'disposable inter frame',
+  4 => 'generated keyframe',
+  5 => 'video info/command frame'
+}
+video_codecs = {
+  1 => 'jpeg',
+  2 => 'h.263',
+  3 => 'screen video',
+  4 => 'vp6',
+  5 => 'vp6a',
+  6 => 'screen video 2',
+  7 => 'avc'
+}
+
+mpeg4_audio_object_types = {
+  0 => "Null",
+  1 => "AAC Main",
+  2 => "AAC LC (Low Complexity)",
+  3 => "AAC SSR (Scalable Sample Rate)",
+  4 => "AAC LTP (Long Term Prediction)",
+  5 => "SBR (Spectral Band Replication)",
+  6 => "AAC Scalable",
+  7 => "TwinVQ",
+  8 => "CELP (Code Excited Linear Prediction)",
+  9 => "HXVC (Harmonic Vector eXcitation Coding)",
+  10 => "Reserved",
+  11 => "Reserved",
+  12 => "TTSI (Text-To-Speech Interface)",
+  13 => "Main Synthesis",
+  14 => "Wavetable Synthesis",
+  15 => "General MIDI",
+  16 => "Algorithmic Synthesis and Audio Effects",
+  17 => "ER (Error Resilient) AAC LC",
+  18 => "Reserved",
+  19 => "ER AAC LTP",
+  20 => "ER AAC Scalable",
+  21 => "ER TwinVQ",
+  22 => "ER BSAC (Bit-Sliced Arithmetic Coding)",
+  23 => "ER AAC LD (Low Delay)",
+  24 => "ER CELP",
+  25 => "ER HVXC",
+  26 => "ER HILN (Harmonic and Individual Lines plus Noise)",
+  27 => "ER Parametric",
+  28 => "SSC (SinuSoidal Coding)",
+  29 => "PS (Parametric Stereo)",
+  30 => "MPEG Surround",
+  31 => "(Escape value)",
+  32 => "Layer-1",
+  33 => "Layer-2",
+  34 => "Layer-3",
+  35 => "DST (Direct Stream Transfer)",
+  36 => "ALS (Audio Lossless)",
+  37 => "SLS (Scalable LosslesS)",
+  38 => "SLS non-core",
+  39 => "ER AAC ELD (Enhanced Low Delay)",
+  40 => "SMR (Symbolic Music Representation) Simple",
+  41 => "SMR Main",
+  42 => "USAC (Unified Speech and Audio Coding) (no SBR)",
+  43 => "SAOC (Spatial Audio Object Coding)",
+  44 => "LD MPEG Surround",
+  45 => "USAC"
+}
+
+mpeg4_audio_frequencies = {
+  0 => "96000",
+  1 => "88200",
+  2 => "64000",
+  3 => "48000",
+  4 => "44100",
+  5 => "32000",
+  6 => "24000",
+  7 => "22050",
+  8 => "16000",
+  9 => "12000",
+  10 => "11025",
+  11 => "8000",
+  12 => "7350",
+  13 => "Reserved",
+  14 => "Reserved"
+}
+
+mpeg4_channel_configurations = {
+  0 => "Defined in AOT Specifc Config",
+  1 => "1 channel: Center",
+  2 => "2 channels: Left, Right",
+  3 => "3 channels: Center, Left, Right",
+  4 => "4 channels: C, L, R rear_C",
+  5 => "5 channels: C, L, R rear_L, rear_R",
+  6 => "6 channels: C, L, R rear_L, rear_R, LFE",
+  7 => "8 channels: C, L, R side_L, side_R, rear_L, rear_R, LFE"
+}
+
+
+expect_ffmpeg_trailing_bytes = false
+
+error "Please specify a file to inspect." unless ARGV.length > 0
+
+# Check for quiet mode
+if ARGV.first == '-q'
+  $quiet_mode = true
+  ARGV.shift
+end
+
+input_filename = ARGV.first
+error "Input file not found." unless File.exist?(input_filename)
+
+file_size = File.size(input_filename)
+input_file = File.open(input_filename)
+
+start_time = Time.now
+STDOUT.sync = true
+
+signature = input_file.read(3)
+error "Not an FLV file." unless signature == 'FLV'
+
+puts_info
+puts_info "INFO:"
+puts_info "Filename: " + File.basename(input_filename)
+puts_info "Size: #{file_size}"
+
+puts_info
+puts_info "HEADER:"
+
+version = input_file.ui8
+puts_info "Version: #{version}"
+
+flags = input_file.ui8
+puts_info "Has audio tags: " + ((flags & 0x4 > 0) ? 'yes' : 'no')
+puts_info "Has video tags: " + ((flags & 0x1 > 0) ? 'yes' : 'no')
+if (flags & 0b11111010) > 0
+  puts_info "WARNING: reserved flag bits are not zero!"
+end
+
+data_loc = input_file.ui32
+puts_info "Data offset: #{data_loc}"
+
+puts_info
+puts_info "BODY:"
+
+more_to_read = true
+while more_to_read
+
+  prev_tag_size = input_file.ui32
+
+  if input_file.eof?
+    puts_info "LASTTAG:"
+    puts_info "  Prev tag size: #{prev_tag_size}"
+
+    more_to_read = false
+    next
+  end
+
+  kind = input_file.ui8
+  size = input_file.ui24
+  timestamp = input_file.ui24
+  timestamp_ext = input_file.ui8
+  full_timestamp = timestamp_ext*(2**24) + timestamp
+  stream_id = input_file.ui24
+
+  kind_name = tag_kinds[kind] || 'unknown'
+
+  if expect_ffmpeg_trailing_bytes
+    expect_ffmpeg_trailing_bytes = false
+
+    if kind == 0
+      puts_info "LASTTAG:"
+      puts_info "  Prev tag size: #{prev_tag_size}"
+
+      puts_info "FFMPEG TRAILING VALUES:"
+      duration_double = (size << 40) + (timestamp << 16) + (timestamp_ext << 8) + (stream_id >> 16)
+      puts_info "  Duration: %0.4f"% [duration_double >> 32, duration_double & (2**32-1)].pack('NN').unpack('G').first
+
+      size_double = ((stream_id & 0xff) << 56) + (input_file.ui32 << 24) + input_file.ui24
+
+      puts_info "  Size: %0.4f"% [size_double >> 32, size_double & (2**32-1)].pack('NN').unpack('G').first
+
+      # Should now be the end of the file.  But if it's not, at least give a warning.
+      if input_file.eof?
+        more_to_read = false
+      else
+        puts_info
+        puts_info "UNKNOWN DATA FOLLOWING"
+      end
+
+      next
+    end
+  end
+
+  puts_info "TAG: (offset #{input_file.pos})"
+  puts_info "  Prev tag size: #{prev_tag_size}"  
+  puts_info "  Type: #{kind} (#{kind_name})"
+  puts_info "  Size: #{size}"
+  puts_info "  Time: #{full_timestamp / 1000.0}"
+  puts_info "  Stream ID: #{stream_id}"
+
+  # Wait for realtime
+  sleep 0.1 until (Time.now - start_time) >= (full_timestamp / 1000.0)
+  STDOUT.write input_file.buffer_flush
+
+  next if size == 0
+
+  if kind_name == 'audio'
+    format_flags = input_file.ui8
+    format = (format_flags >> 4) & 15
+    rate = (2 ** ((format_flags >> 2) & 3) * 5512.5).round
+    bits = ((format_flags >> 1) & 1) * 8 + 8
+    channels = format_flags & 1 + 1
+    puts_info "  Audio format: #{format} (#{audio_formats[format] || 'unknown'})"
+    puts_info "  Audio rate: #{rate}"
+    puts_info "  Audio bits: #{bits}"
+    puts_info "  Audio channels: #{channels}"
+
+    if format == 10
+      packet_type = input_file.ui8
+      puts_info "  Audio packet type: #{packet_type} (#{packet_type == 0 ? 'sequence header' : 'raw'})"
+      audio_specific_config = input_file.read(size - 2)
+      if packet_type == 0
+        if audio_specific_config.length >= 2
+          asc = Bitstream.new(audio_specific_config)
+          audio_object_type = asc.getbits(5)
+          if audio_object_type == 31
+            audio_object_type = asc.getbits(6) + 32 # Extended object type
+          end
+          puts_info "    Audio Object Type: #{audio_object_type} - #{mpeg4_audio_object_types[audio_object_type]}"
+
+          frequency_index = asc.getbits(4)
+          if frequency_index == 15
+            frequency = asc.getbits(24) # Extended frequency
+          else
+            frequency = mpeg4_audio_frequencies[frequency_index]
+          end
+          puts_info "    Sampling Frequency: #{frequency}"
+          
+          channel_config = asc.getbits(4)
+          puts_info "    Channel Config: #{mpeg4_channel_configurations[channel_config]}"
+
+          # Check for extension data.
+          extension_object_type = 0
+          sbr_present_flag = 0
+          ps_present_flag = 0
+          extension_sampling_frequency_index = -1
+          extension_sampling_frequency = -1
+          if audio_object_type == 5 || audio_object_type == 29
+            extension_object_type = 5
+            sbr_present_flag = 1
+            ps_present_flag = 1 if audio_object_type == 29
+            extension_sampling_frequency_index = asc.getbits(4)
+            if extension_sampling_frequency_index == 0xf
+              extension_sampling_frequency = asc.getbits(24)
+            else
+              extension_sampling_frequency = mpeg4_audio_frequencies[extension_sampling_frequency_index]
+            end
+            puts_info "    Extension sampling frequency: #{extension_sampling_frequency}"
+
+            audio_object_type = asc.getbits(5)
+            if audio_object_type == 31
+              audio_object_type = asc.getbits(6) + 32 # Extended object type
+            end
+            puts_info "    Updated Audio Object Type: #{audio_object_type} - #{mpeg4_audio_object_types[audio_object_type]}"
+            puts_info "    SBR Present: #{sbr_present_flag}"
+            puts_info "    PS Present: #{ps_present_flag}"
+            
+          end
+
+          if audio_object_type == 2 # Or a bunch of others
+            # GASpecificConfig
+            frame_length_flag = asc.getbits(1)
+            depends_on_core_coder = asc.getbits(1)
+            if depends_on_core_coder == 1
+              core_coder_delay = asc.getbits(14)
+              puts_info "    Core coder delay: #{core_coder_delay}"
+            end
+            extension_flag = asc.getbits(1)
+            if channel_config == 0
+              puts_info "ERROR: Reading channel config from PCE is not currently supported."
+              # Should read program_config_element here.
+            end
+            if audio_object_type == 6 || audio_object_type == 20
+              layer_nr = asc.getbits(3)
+            end
+            if extension_flag == 1
+              if audio_object_type == 22
+                num_of_sub_frame = asc.getbits(5)
+                layer_length = asc.getbits(11)
+              end
+              if [17,19,20.23].include?(audio_object_type)
+                aac_section_data_resilience_flag = asc.getbits(1)
+                aac_scalefactor_data_resilience_flag = asc.getbits(1)
+                aac_spectral_data_resilience_flag = asc.getbits(1)
+              end
+              extension_flag_3 = asc.getbits(1)
+              if extension_flag_3 == 1
+                # Not yet defined!  Yay!
+                puts_info "ERROR: Undefined version 3 data."
+              end
+            end
+          end
+
+          if extension_object_type != 5 && asc.remaining_bits >= 16
+            sync_extension_type = asc.getbits(11)
+            if sync_extension_type == 0x2b7
+
+              extension_object_type = asc.getbits(5)
+              if extension_object_type == 31
+                extension_object_type = asc.getbits(6) + 32 # Extended object type
+              end
+
+              if extension_object_type == 5
+                sbr_present_flag = asc.getbits(1)
+                if sbr_present_flag == 1
+                  extension_sampling_frequency_index = asc.getbits(4)
+                  if extension_sampling_frequency_index == 0xf
+                    extension_sampling_frequency = asc.getbits(24)
+                  else
+                    extension_sampling_frequency = mpeg4_audio_frequencies[extension_sampling_frequency_index]
+                  end
+                  puts_info "    Extension sampling frequency: #{extension_sampling_frequency}"
+                  if asc.remaining_bits >= 12
+                    sync_extension_type = asc.getbits(11)
+                    if sync_extension_type == 0x548
+                      ps_present_flag = 1
+                    end
+                  end
+                end
+              end
+            end
+            puts_info "    SBR Present: #{sbr_present_flag}"
+            puts_info "    PS Present: #{ps_present_flag}"
+          end
+
+        else
+          puts_info "    ERROR: AudioSpecificConfig too small! Assuming stream info is accurate."
+        end
+      end
+    else
+      input_file.read(size - 1)
+    end
+    
+
+  elsif kind_name == 'video'
+    format_flags = input_file.ui8
+    frame_type = (format_flags >> 4) & 15
+    codec_id = format_flags & 0xf
+    
+    puts_info "  Video frame type: #{frame_type} (#{video_frame_types[frame_type] || 'unknown'})"
+    puts_info "  Video codec: #{codec_id} (#{video_codecs[codec_id] || 'unknown'})"
+    
+    if codec_id == 4 #&& frame_type == 1 # vp6 keyframe
+      stream_bytes = input_file.read(9)
+
+      vp6_frame_mode = (stream_bytes[1] >> 7) & 1
+      vp6_q_param = (stream_bytes[1] >> 1) & 0b00111111
+      vp6_marker = stream_bytes[1] & 1
+      
+      puts_info "  VP6 Frame Mode: #{vp6_frame_mode}"
+      puts_info "  VP6 Q Param: #{vp6_q_param}"
+      puts_info "  VP6 Marker: #{vp6_marker} (#{vp6_marker == 1 ? 'VP60' : 'VP61/VP62'})"
+
+      offset = 2
+      # if frame_mode==0, there's an extra byte of data.
+      if vp6_frame_mode == 0
+        vp6_version = (stream_bytes[2] >> 3) & 0b00011111
+        vp6_version2 = (stream_bytes[2] >> 1) & 3
+        vp6_interlaced = stream_bytes[2] & 1
+        
+        puts_info "  VP6 Version: #{vp6_version}"
+        puts_info "  VP6 Version2: #{vp6_version2}"
+        puts_info "  VP6 Interlaced: #{vp6_interlaced}"
+
+        offset += 1
+
+        # if marker==1 or version2==0, there are 2 more extra data bytes
+        if vp6_marker == 1 || vp6_version2 == 0
+          vp6_secondary_buffer_offset = stream_bytes[offset] << 8 + stream_bytes[offset + 1]
+          puts_info "  VP6 Secondary Buffer Offset: #{vp6_secondary_buffer_offset}"
+
+          offset += 2
+        end
+
+        # Now offset points to the resolution values: [h_mb,w_mb,h_disp,w_disp]
+        enc_width = stream_bytes[offset+1] * 16
+        disp_width = stream_bytes[offset+3] * 16
+        h_adjust = (stream_bytes[0] >> 4) & 15
+
+        enc_height = stream_bytes[offset] * 16
+        disp_height = stream_bytes[offset+2] * 16
+        v_adjust = stream_bytes[0] & 0x0f
+
+        width = disp_width - h_adjust
+        height = disp_height - v_adjust
+
+        if enc_width != disp_width || enc_height != disp_height
+          puts_info "  Encoded Pixels: #{enc_width}"
+          puts_info "  Encoded Pixels: #{enc_height}"
+        end
+
+        puts_info "  Video width: #{width} (#{disp_width} - #{h_adjust})"
+        puts_info "  Video height: #{height} (#{disp_height} - #{v_adjust})"
+      else
+        if vp6_marker == 1
+          vp6_secondary_buffer_offset = stream_bytes[offset] << 8 + stream_bytes[offset + 1]
+          puts_info "  VP6 Secondary Buffer Offset: #{vp6_secondary_buffer_offset}"
+        end
+      end
+      
+      
+      input_file.read(size - 10)
+
+    elsif codec_id == 5 && frame_type == 1 # vp6a keyframe
+      stream_bytes = input_file.read(9)
+
+      disp_width = stream_bytes[7] * 16
+      h_adjust = (stream_bytes[0] >> 4) & 15
+      disp_height = stream_bytes[6] * 16
+      v_adjust = stream_bytes[0] & 0x0f
+
+      width = disp_width - h_adjust
+      height = disp_height - v_adjust
+
+      puts_info "  Video width: #{width} (#{disp_width} - #{h_adjust})"
+      puts_info "  Video height: #{height} (#{disp_height} - #{v_adjust})"
+
+      input_file.read(size - 10)
+
+    elsif codec_id == 7 # AVC frame
+      packet_type = input_file.ui8
+      bytes_read = 2
+
+      puts_info "  Packet Type: %s" % ({0 => 'AVC Sequence Header', 1 => 'AVC NALU', 2 => 'AVC end of sequence'}[packet_type] || 'unknown')
+      if packet_type == 1 && size >= 5
+        composition_time = input_file.si24
+        bytes_read += 3
+        puts_info "  Composition Time Offset: %0.3f" % (composition_time / 1000.0)
+        puts_info "  PTS: %0.3f" % ((full_timestamp + composition_time) / 1000.0)
+      elsif packet_type == 1
+        puts_info "  PTS: %0.3f" % (full_timestamp / 1000.0)
+      elsif packet_type == 2
+        # End of Sequence... Might have ffmpeg junk come next
+        expect_ffmpeg_trailing_bytes = true
+      end
+
+      input_file.read(size - bytes_read)
+    else
+
+      input_file.read(size - 1)
+    end
+
+  elsif kind_name == 'script'
+    name_tag_type = input_file.ui8
+    puts_info "  WARNING: Script tag name is not string type!" unless name_tag_type == 2
+
+    name_len = input_file.ui16
+    # puts_info "  Script object name length: #{name_len}"
+    name = input_file.read(name_len)
+    puts_info "  Script object name: #{name}"
+    
+    subsequent_data = input_file.read(size - (name_len + 3))
+    decode_script_data(subsequent_data, '    ')
+  else
+    input_file.read(size)
+  end
+  
+end
+
+# Make sure everything gets written.
+STDOUT.write input_file.buffer_flush
+
+puts_info
+close(input_file) rescue nil
