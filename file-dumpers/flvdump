@@ -113,6 +113,7 @@ def decode_script_data(data, prefix = '', cur_pos = 0)
         name = ''
         if data[cur_pos] == 9
           # End of array.
+          cur_pos += 1
           break
         end
       else
