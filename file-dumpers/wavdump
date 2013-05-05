@@ -1,0 +1,61 @@
+#!/usr/bin/env ruby
+
+require 'getoptlong'
+
+class WaveFile
+  HEADER_NAMES = [
+    :riff, :wave_size, :wave, 
+    :fmt, :fmt_size, :format, :channels, :sample_rate, :byte_rate, :block_align, :bits_per_sample
+  ]
+  
+  attr_reader :headers
+  
+  def initialize(filename)
+    @headers = {}
+    @file = File.open(filename)
+    @data_lenth = 0
+    @data_position = nil
+    
+    header_num = 0
+    @file.read(36).unpack('a4Va4a4VvvVVvv').each do |value|
+      @headers[HEADER_NAMES[header_num]] = value
+      header_num += 1
+    end
+    
+    # Read the rest of the chunks.
+    while !@file.eof?
+      chunk_id,chunk_size = @file.read(8).unpack('a4V')
+      if chunk_id == 'data'
+        @data_position = @file.pos
+        @data_length = chunk_size
+      end
+      @file.seek(chunk_size, IO::SEEK_CUR)
+    end
+    
+    raise "No data chunk!" unless @data_position
+    
+    @headers[:sample_count] = @data_length / @headers[:block_align]
+  end
+  
+  def data_file(sample_start)
+    @file.seek(@data_position + sample_start * @headers[:block_align])
+    @file
+  end
+  
+  def duration
+    @duration ||= @headers[:sample_count].to_f / @headers[:sample_rate]
+  end
+  
+  def close
+    @file.close
+  end
+end
+
+
+inwav = WaveFile.new(ARGV.first)
+puts "File info:"
+puts "  Channels:    #{inwav.headers[:channels]}"
+puts "  Sample Rate: #{inwav.headers[:sample_rate]}"
+puts "  Bits/Sample: #{inwav.headers[:bits_per_sample]}"
+puts "  Duration:    #{inwav.duration}"
+
