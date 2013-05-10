@@ -502,6 +502,7 @@ class AacFrameDecoder
     
       # raw_data_block
       while @data.bit_offset < @data.total_bits
+        puts "Data: #{@data.bit_offset} / #{@data.total_bits}"
         syntax_element = read_syntax_element
         break if syntax_element[:id] == ID_END
     
@@ -658,14 +659,18 @@ class AacFrameDecoder
       {}
     when ID_CPE:
       instance_tag = @data.getbits(4)
+      puts "    Instance tag: #{instance_tag}"
       common_window = @data.getbits(1)
+      puts "    Common Window: #{common_window}"
       if common_window == 1
         @ics = ics_info
+        puts "    ICS Info: #{@ics.inspect}"
         ms_mask_present = @data.getbits(2)
         if ms_mask_present == 1
           raise "ms_mask stuff not yet supported"
         end
       end
+      individual_channel_stream(common_window)
       individual_channel_stream(common_window)
       {}
     when ID_CCE:
@@ -703,27 +708,36 @@ class AacFrameDecoder
     if common_window == 0
       @ics = ics_info
     end
-
+    puts "AAA - #{@data.bit_offset}"
     section_data
+    puts "BBB - #{@data.bit_offset}"
 
     scale_factor_data
+    puts "CCC - #{@data.bit_offset}"
 
     pulse_data_present = @data.getbits(1)
     if pulse_data_present
+      puts "CCCB - #{@data.bit_offset}"
       pulse_data
     end
+    puts "DDD - #{@data.bit_offset}"
 
     tns_data_present = @data.getbits(1)
     if tns_data_present
+      puts "DDDB - #{@data.bit_offset}"
       tns_data
     end
+    puts "EEE - #{@data.bit_offset}"
 
     gain_control_data_present = @data.getbits(1)
     if gain_control_data_present
       gain_control_data
     end
+    puts "FFF"
 
-    spectral_data
+    result = spectral_data
+    puts "GGG"
+    result
   end
 
   def section_data
