@@ -1,0 +1,1509 @@
+#!/usr/bin/env ruby
+
+#
+# FLV Dump
+#
+
+def error(msg); puts msg; exit; end
+
+class IO
+  def ui8; read(1).unpack('C').first; end
+  def ui16; read(2).unpack('n').first; end
+  def ui32; read(4).unpack('N').first; end
+  def ui24; ("\000" + read(3)).unpack('N').first; end
+  def si24; v = ui24; v >= (2**23) ? v-(2**24) : v; end
+end
+
+class Bitstream
+  attr_accessor :bit_offset, :total_bits
+  
+  def initialize(data_string, starting_byte_offset = 0)
+    @data = data_string
+    @total_bits = @data.length * 8
+    @bit_offset = 0
+    @pos = starting_byte_offset
+  end
+
+  def nextbits(count)
+    raise "nextbits of more than 16 not implemented" if count > 16
+    getbits_internal(count, false)
+  end
+
+  # Return an integer of the next _count_ bits and increment @bit_offset so that
+  # subsequent calls will get following bits.
+  def getbits(count)
+    value = 0
+    while count > 16
+      value += (getbits_internal(16) << 16)
+      count -= 16
+    end
+    value += getbits_internal(count)
+  end
+  
+  # Do getbits, with up to 16 bits.
+  def getbits_internal(count, increment_position = true)
+    return 0 if count > 16 || count < 1
+    byte = @bit_offset / 8
+    bit  = @bit_offset % 8
+    raise "Read past end of bitstream!" if (@pos+byte) > @data.length
+    val = (@data[@pos + byte].to_i << 16) + (@data[@pos + byte + 1].to_i << 8) + @data[@pos + byte + 2].to_i
+    val = (val << bit) & 16777215
+    val = val >> (24 - count)
+
+    @bit_offset += count if increment_position
+    return val
+  end
+  
+  def append(data_string)
+    @data << data_string
+    @total_bits += data_string.length
+  end
+  
+  # Remove any data that we've moved past already, so we don't build up too much in memory.
+  def pop
+    byte = @bit_offset / 8
+    bit = @bit_offset % 8
+
+    @pos += byte
+    @bit_offset = bit
+
+    if @pos > 0
+      @data = @data[@pos..-1]
+      @pos = 0
+    end
+
+    @total_bits = @data.length * 8
+
+    true
+  end
+
+  def huff(valid_values_hash)
+    maxlen = valid_values_hash.keys.max.to_s(2).length
+    bits_read = 0
+    v = 0
+    begin
+      v = (v << 1) + getbits(1)
+      bits_read += 1
+    end until valid_values_hash[v] || bits_read > maxlen
+    return nil if bits_read > maxlen
+    v
+  end
+end
+
+
+
+
+class AacFrameDecoder
+  ONLY_LONG_SEQUENCE = 0
+  LONG_START_SEQUENCE = 1
+  EIGHT_SHORT_SEQUENCE = 2
+  LONG_STOP_SEQUENCE = 3
+
+  ZERO_HCB = 0
+  FIRST_PAIR_HCB = 5
+  ESC_HCB = 11
+  QUAD_LEN = 4
+  PAIR_LEN = 2
+  NOISE_HCB = 13
+  INTENSITY_HCB2 = 14
+  INTENSITY_HCB = 15
+  ESC_FLAG = 16
+
+  ID_SCE = 0
+  ID_CPE = 1
+  ID_CCE = 2
+  ID_LFE = 3
+  ID_DSE = 4
+  ID_PCE = 5
+  ID_FIL = 6
+  ID_END = 7
+
+  SYNTAX_ELEMENT_NAMES = {
+    0 => 'SCE',
+    1 => 'CPE',
+    2 => 'CCE',
+    3 => 'LFE',
+    4 => 'DSE',
+    5 => 'PCE',
+    6 => 'FIL',
+    7 => 'END'
+  }
+
+  EXT_FILL =          0b0000
+  EXT_FILL_DATA =     0b0001
+  EXT_DATA_ELEMENT  = 0b0010
+  EXT_DYNAMIC_RANGE = 0b1011
+  EXT_SBR_DATA =      0b1101
+  EXT_SBR_DATA_CRC =  0b1110
+
+  PRED_SFB_MAX = {
+    96000 => 33,
+    88200 => 33,
+    64000 => 38,
+    48000 => 40,
+    44100 => 40,
+    32000 => 40,
+    24000 => 41,
+    22050 => 41,
+    16000 => 37,
+    12000 => 37,
+    11025 => 37,
+     8000 => 34
+  }
+
+  NUM_SWB_LONG_WINDOW = {
+    96000 => 41,
+    88200 => 41,
+    64000 => 47,
+    48000 => 49,
+    44100 => 49,
+    32000 => 51,
+    24000 => 47,
+    22050 => 47,
+    16000 => 43,
+    12000 => 43,
+    11025 => 43,
+     8000 => 40
+  }
+  NUM_SWB_SHORT_WINDOW = {
+    96000 => 12,
+    88200 => 12,
+    64000 => 12,
+    48000 => 14,
+    44100 => 14,
+    32000 => 14,
+    24000 => 15,
+    22050 => 15,
+    16000 => 15,
+    12000 => 15,
+    11025 => 15,
+     8000 => 15
+  }
+
+  SF_HUFF_VALUES = {
+    0xa => true,
+    0xb => true,
+    0xc => true,
+    0xf6 => true,
+    0xf7 => true,
+    0xf8 => true,
+    0xf9 => true,
+    0xfa => true,
+    0xff4 => true,
+    0xff5 => true,
+    0xff6 => true,
+    0xff7 => true,
+    0xff8 => true,
+    0xff9 => true,
+    0xfff0 => true,
+    0xfff1 => true,
+    0xfff2 => true,
+    0xfff3 => true,
+    0xfff4 => true,
+    0xfff5 => true,
+    0xfff6 => true,
+    0x0 => true,
+    0x1a => true,
+    0x1b => true,
+    0x1f6 => true,
+    0x1f7 => true,
+    0x1f8 => true,
+    0x1f9 => true,
+    0x1ff4 => true,
+    0x1ff5 => true,
+    0x1ff6 => true,
+    0x1ff7 => true,
+    0x1ff8 => true,
+    0x1ffee => true,
+    0x1ffef => true,
+    0x1fff0 => true,
+    0x3a => true,
+    0x3b => true,
+    0x3f4 => true,
+    0x3f5 => true,
+    0x3f6 => true,
+    0x3f7 => true,
+    0x3f8 => true,
+    0x3f9 => true,
+    0x3ff2 => true,
+    0x3ff3 => true,
+    0x3ff4 => true,
+    0x3ff5 => true,
+    0x3ff6 => true,
+    0x3ff7 => true,
+    0x3ff8 => true,
+    0x3ff9 => true,
+    0x3ffe2 => true,
+    0x3ffe3 => true,
+    0x3ffe4 => true,
+    0x3ffe5 => true,
+    0x3ffe6 => true,
+    0x3ffe7 => true,
+    0x3ffe8 => true,
+    0x4 => true,
+    0x7a => true,
+    0x7f4 => true,
+    0x7f5 => true,
+    0x7f6 => true,
+    0x7f7 => true,
+    0x7f8 => true,
+    0x7f9 => true,
+    0x7ff4 => true,
+    0x7ff5 => true,
+    0x7ff6 => true,
+    0x7ff7 => true,
+    0x7ffd2 => true,
+    0x7ffd3 => true,
+    0x7ffd4 => true,
+    0x7ffd5 => true,
+    0x7ffd6 => true,
+    0x7ffd7 => true,
+    0x7ffd8 => true,
+    0x7ffd9 => true,
+    0x7ffda => true,
+    0x7ffdb => true,
+    0x7ffdc => true,
+    0x7ffdd => true,
+    0x7ffde => true,
+    0x7ffdf => true,
+    0x7ffe0 => true,
+    0x7ffe1 => true,
+    0x7ffe2 => true,
+    0x7ffe3 => true,
+    0x7ffe4 => true,
+    0x7ffe5 => true,
+    0x7ffe6 => true,
+    0x7ffe7 => true,
+    0x7ffe8 => true,
+    0x7ffe9 => true,
+    0x7ffea => true,
+    0x7ffeb => true,
+    0x7ffec => true,
+    0x7ffed => true,
+    0x7ffee => true,
+    0x7ffef => true,
+    0x7fff0 => true,
+    0x7fff1 => true,
+    0x7fff2 => true,
+    0x7fff3 => true,
+    0x7fff4 => true,
+    0x7fff5 => true,
+    0x7fff6 => true,
+    0x7fff7 => true,
+    0x7fff8 => true,
+    0x7fff9 => true,
+    0x7fffa => true,
+    0x7fffb => true,
+    0x7fffc => true,
+    0x7fffd => true,
+    0x7fffe => true,
+    0x7ffff => true,
+    0x38 => true,
+    0x39 => true,
+    0x78 => true,
+    0x79 => true
+  }
+
+  SWB_OFFSET_LONG_WINDOW = {}
+
+  SWB_OFFSET_LONG_WINDOW[24000] = {
+     0 => 0,
+     1 => 4,
+     2 => 8,
+     3 => 12,
+     4 => 16,
+     5 => 20,
+     6 => 24,
+     7 => 28,
+     8 => 32,
+     9 => 36,
+     10 => 40,
+     11 => 44,
+     12 => 52,
+     13 => 60,
+     14 => 68,
+     15 => 76,
+     16 => 84,
+     17 => 92,
+     18 => 100,
+     19 => 108,
+     20 => 116,
+     21 => 124,
+     22 => 136,
+     24 => 160,
+     25 => 172,
+     26 => 188,
+     27 => 204,
+     28 => 220,
+     29 => 240,
+     30 => 260,
+     31 => 284,
+     32 => 308,
+     33 => 336,
+     34 => 364,
+     35 => 396,
+     36 => 432,
+     37 => 468,
+     38 => 508,
+     39 => 552,
+     40 => 600,
+     41 => 652,
+     42 => 704,
+     43 => 768,
+     44 => 832,
+     45 => 896,
+     46 => 960
+  }
+  SWB_OFFSET_LONG_WINDOW[24000].default = 1204
+  
+  SWB_OFFSET_LONG_WINDOW[44100] = {
+     0 => 0,
+     1 => 4,
+     2 => 8,
+     3 => 12,
+     4 => 16,
+     5 => 20,
+     6 => 24,
+     7 => 28,
+     8 => 32,
+     9 => 36,
+    10 => 40,
+    11 => 48,
+    12 => 56,
+    13 => 64,
+    14 => 72,
+    15 => 80,
+    16 => 88,
+    17 => 96,
+    18 => 108,
+    19 => 120,
+    20 => 132,
+    21 => 144,
+    22 => 160,
+    23 => 176,
+    25 => 216,
+    26 => 240,
+    27 => 264,
+    28 => 292,
+    29 => 320,
+    30 => 352,
+    31 => 384,
+    32 => 416,
+    33 => 448,
+    34 => 480,
+    35 => 512,
+    36 => 544,
+    37 => 576,
+    38 => 608,
+    39 => 640,
+    40 => 672,
+    41 => 704,
+    42 => 736,
+    43 => 768,
+    44 => 800,
+    45 => 832,
+    46 => 864,
+    47 => 896,
+    48 => 928
+  }
+  SWB_OFFSET_LONG_WINDOW[44100].default = 1024
+
+  SWB_OFFSET_LONG_WINDOW[48000] = SWB_OFFSET_LONG_WINDOW[44100]
+    
+
+  def initialize(frame_data, num_blocks, sample_rate, protection_absent)
+    @data = Bitstream.new(frame_data)
+    @num_blocks = num_blocks
+    @sample_rate = sample_rate
+    @protection_absent = protection_absent
+    decode_frame
+  end
+
+  def decode_frame
+    if @num_blocks == 0
+      # adts_error_check
+      if @protection_absent == 0
+        crc = @data.getbits(16)
+      end
+    
+      # raw_data_block
+      while @data.bit_offset < @data.total_bits
+        puts "Data: #{@data.bit_offset} / #{@data.total_bits}"
+        syntax_element = read_syntax_element
+        break if syntax_element[:id] == ID_END
+    
+        # break # We don't parse 'em right yet, so quit out.
+      end
+    else
+      # adts_header_error_check
+      if @protection_absent == 0
+        positions = []
+        @num_blocks.times { positions << @data.getbits(16) }
+        crc = @data.getbits(16)
+      end
+    
+      (@num_blocks + 1).times do
+        # raw_data_block
+        while @data.bit_offset < @data.total_bits
+          syntax_element = read_syntax_element
+          break if syntax_element[:id] == ID_END
+    
+          # break # We don't parse 'em right yet, so quit out.
+        end
+    
+        # adts_raw_data_block_error_check
+        if @protection_absent == 0
+          crc = @data.getbits(16)
+        end
+      end
+    end
+  end
+
+  # Check if bit (right-most = bit zero) is set in value.
+  def bit_set?(value, bit_number)
+    ((value >> bit_number) & 1) == 1
+  end
+
+  def ics_info
+    ics_reserved_bit = @data.getbits(1)
+    window_sequence = @data.getbits(2)
+    window_shape = @data.getbits(1)
+    if window_sequence == EIGHT_SHORT_SEQUENCE
+      max_sfb = @data.getbits(4)
+      scale_factor_grouping = @data.getbits(7)
+    else
+      max_sfb = @data.getbits(6)
+      predictor_data_present = @data.getbits(1)
+      if predictor_data_present == 1
+        predictor_reset = @data.getbits(1)
+        if predictor_reset == 1
+          predictor_reset_group_number = @data.getbits(5)
+        end
+        prediction_used = []
+        [max_sfb, PRED_SFB_MAX[@sample_rate]].min.times do
+          prediction_used << @data.getbits(1)
+        end
+      end
+    end
+
+    window_group_length = []
+    @sect_sfb_offset = []
+    swb_offset = []
+    
+    ics_result = {}
+    ics_result[:window_sequence] = window_sequence
+    ics_result[:window_shape] = window_shape
+    ics_result[:max_sfb] = max_sfb
+
+    # CALCULATE VALUES USED FOR OTHER STUFF
+    case window_sequence
+    when ONLY_LONG_SEQUENCE,LONG_START_SEQUENCE,LONG_STOP_SEQUENCE:
+      num_windows = 1;
+      num_window_groups = 1;
+      window_group_length[num_window_groups-1] = 1;
+      num_swb = NUM_SWB_LONG_WINDOW[@sample_rate];
+      # preparation of sect_sfb_offset for long blocks
+      # also copy the last value!
+      (max_sfb+1).times do |i|
+        @sect_sfb_offset[0] ||= []
+        @sect_sfb_offset[0][i] = SWB_OFFSET_LONG_WINDOW[@sample_rate][i];
+        # swb_offset[i] = swb_offset_long_window[@sampling_freq_index][i];
+      end
+    when EIGHT_SHORT_SEQUENCE:
+      num_windows = 8;
+      num_window_groups = 1;
+      window_group_length[num_window_groups-1] = 1;
+      num_swb = NUM_SWB_SHORT_WINDOW[@sample_rate];
+      (NUM_SWB_SHORT_WINDOW[@sample_rate] + 1).times do |i|
+        # swb_offset[i] = swb_offset_short_window[@sampling_freq_index][i];
+      end
+      (num_windows - 1).times do |i|
+        if (bit_set?(scale_factor_grouping,6-i)) == 0
+          num_window_groups += 1;
+          window_group_length[num_window_groups-1] = 1;
+        else
+          window_group_length[num_window_groups-1] += 1;
+        end
+      end
+      # preparation of sect_sfb_offset for short blocks
+      num_window_groups.times do |g|
+        sect_sfb = 0;
+        offset = 0;
+        max_sfb.times do |i|
+          # width = swb_offset_short_window[@sampling_freq_index][i+1] - swb_offset_short_window[@sampling_freq_index][i];
+          # width *= window_group_length[g];
+          # @sect_sfb_offset[g][sect_sfb += 1] = offset;
+          # offset += width;
+        end
+        # @sect_sfb_offset[g][sect_sfb] = offset;
+      end
+    end
+
+    ics_result[:num_windows] = num_windows
+    ics_result[:num_window_groups] = num_window_groups
+
+    ics_result
+  end
+
+  def extension_payload(count)
+    extension_type = @data.getbits(4)
+    case extension_type
+    when EXT_DYNAMIC_RANGE:
+      puts "    Dynamic Range Data"
+      raise "EXT_DYNAMIC_RANGE not yet supported!"
+      # dynamic_range_info(@data)
+    when EXT_SBR_DATA:
+      puts "    SBR DATA!"
+      raise "EXT_SBR_DATA not yet supported!"
+      # sbr_extension_data(@data, id_aac, 0)
+    when EXT_SBR_DATA_CRC:
+      puts "    SBR DATA (CRC)!"
+      raise "EXT_SBR_DATA_CRC not yet supported!"
+      # sbr_extension_data(@data, id_aac, 1)
+    when EXT_DATA_ELEMENT: # from 14496-3, 2005 version
+      puts "    Data Element"
+      raise "EXT_DATA_ELEMENT not yet supported!"
+      
+    when EXT_FILL_DATA:
+      puts "    Extra Fill Data (#{count} bytes)"
+      fill_nibble = @data.getbits(4) # Should be '0000'
+      (count - 1).times { @data.getbits(8) } # Each should be '10100101'
+      return count
+    else
+      puts "    Other Fill Data (type #{extension_type}) (#{count} bytes)"
+      # Treat just like EXT_FILL_DATA but if we were
+      # validating, we wouldn't care what the data was.
+      fill_nibble = @data.getbits(4) # Can be anything
+      (count - 1).times { @data.getbits(8) } # Can be anything
+      return count
+    end
+  end
+
+  def read_syntax_element
+    se_id = @data.getbits(3)
+    puts "  Syntax element: #{se_id} (#{SYNTAX_ELEMENT_NAMES[se_id]})"
+    case se_id
+    when ID_SCE:
+      instance_tag = @data.getbits(4)
+      puts "    Instance tag: #{instance_tag}"
+      individual_channel_stream(0)
+      {}
+    when ID_CPE:
+      instance_tag = @data.getbits(4)
+      puts "    Instance tag: #{instance_tag}"
+      common_window = @data.getbits(1)
+      puts "    Common Window: #{common_window}"
+      if common_window == 1
+        @ics = ics_info
+        puts "    ICS Info: #{@ics.inspect}"
+        ms_mask_present = @data.getbits(2)
+        if ms_mask_present == 1
+          raise "ms_mask stuff not yet supported"
+        end
+      end
+      individual_channel_stream(common_window)
+      individual_channel_stream(common_window)
+      {}
+    when ID_CCE:
+      raise "CCE not yet supported."
+      {}
+    when ID_LFE:
+      raise "LFE not yet supported."
+      {}
+    when ID_DSE:
+      raise "DSE not yet supported."
+      {}
+    when ID_PCE:
+      raise "PCE not yet supported."
+      {}
+    when ID_FIL:
+      count = @data.getbits(4)
+      if count == 15
+        count += @data.getbits(8)
+      end
+      puts "    #{count} bytes of extension payload data"
+      while count > 0
+        count -= extension_payload(count)
+      end
+      { :id => ID_FIL }
+    when ID_END:
+      { :id => ID_END }
+    else
+      puts "  UNKNOWN SYNTAX ELEMENT: #{se_id}"
+      { :id => -1 }
+    end
+  end
+
+  def individual_channel_stream(common_window)
+    global_gain = @data.getbits(8)
+    if common_window == 0
+      @ics = ics_info
+    end
+    puts "AAA - #{@data.bit_offset}"
+    section_data
+    puts "BBB - #{@data.bit_offset}"
+
+    scale_factor_data
+    puts "CCC - #{@data.bit_offset}"
+
+    pulse_data_present = @data.getbits(1)
+    if pulse_data_present
+      puts "CCCB - #{@data.bit_offset}"
+      pulse_data
+    end
+    puts "DDD - #{@data.bit_offset}"
+
+    tns_data_present = @data.getbits(1)
+    if tns_data_present
+      puts "DDDB - #{@data.bit_offset}"
+      tns_data
+    end
+    puts "EEE - #{@data.bit_offset}"
+
+    gain_control_data_present = @data.getbits(1)
+    if gain_control_data_present
+      gain_control_data
+    end
+    puts "FFF"
+
+    result = spectral_data
+    puts "GGG"
+    result
+  end
+
+  def section_data
+    if @ics && @ics[:window_sequence] == EIGHT_SHORT_SEQUENCE
+      sect_esc_val = (1 << 3) - 1
+      sect_len_incr_bitcount = 3
+    else
+      sect_esc_val = (1 << 3) - 1
+      sect_len_incr_bitcount = 5
+    end
+
+    @sect_cb = []
+    @sect_start = []
+    @sect_end = []
+    @sfb_cb = []
+    @num_sec = []
+    
+    @ics[:num_window_groups].times do |g|
+      k = 0
+      i = 0
+      while k < @ics[:max_sfb]
+        @sect_cb[g] ||= []
+        @sect_cb[g][i] = @data.getbits(4)
+        sect_len = 0
+        while (sect_len_incr = @data.getbits(sect_len_incr_bitcount)) == sect_esc_val
+          sect_len += sect_esc_val
+        end
+        sect_len += sect_len_incr
+
+        @sect_start[g] ||= []
+        @sect_end[g] ||= []
+        @sect_start[g][i] = k
+        @sect_end[g][i] = k + sect_len
+
+        @sfb_cb[g] ||= []
+        k.upto(k+sect_len) do |sfb|
+          @sfb_cb[g][sfb] = @sect_cb[g][i]
+        end
+        k += sect_len
+        i += 1
+      end
+      @num_sec[g] = i
+    end
+  end
+
+  def scale_factor_data
+    @ics[:num_window_groups].times do |g|
+      @ics[:max_sfb].times do |sfb|
+        if @sfb_cb[g][sfb] != ZERO_HCB
+          # Technically the purpose of this next field depends on is_intensity(g,sfb), but the
+          # length is the same either way, so we'll just read/dispose unless we need hcode_sf or dpcm_is_position or dpcm_sf
+          result = @data.huff(SF_HUFF_VALUES)
+          raise "Invalid Huffman table value!" if result.nil?
+        end
+      end
+    end
+  end
+
+  def pulse_data
+    number_pulse = @data.getbits(2)
+    pulse_start_sfb = @data.getbits(6)
+
+    pulse_offset = []
+    pulse_amp = []
+    number_pulse.times do |i|
+      pulse_offset << @data.getbits(5)
+      pulse_amp << @data.getbits(4)
+    end
+  end
+
+  def tns_data
+    if @ics && @ics[:window_sequence] == EIGHT_SHORT_SEQUENCE
+      n_filt_bits = 1
+      length_bits = 4
+      order_bits = 3
+    else
+      n_filt_bits = 2
+      length_bits = 6
+      order_bits = 5
+    end
+
+    n_filt = []
+    length = []
+    order = []
+    coef_compress = []
+    direction = []
+    coef = []
+    coef_res = []
+    @ics[:num_windows].times do |w|
+      n_filt[w] = @data.getbits(n_filt_bits)
+      if n_filt[w] > 0
+        coef_res[w] = @data.getbits(1)
+      end
+      length[w] = []
+      order[w] = []
+      direction[w] = []
+      coef_compress[w] = []
+      coef[w] = []
+      n_filt[w].times do |filt|
+        length[w][filt] = @data.getbits(length_bits)
+        order[w][filt] = @data.getbits(order_bits)
+        if order[w][filt] > 0
+          direction[w][filt] = @data.getbits(1)
+          coef_compress[w][filt] = @data.getbits(1)
+          if coef_compress[w][filt] == 1
+            # coef MSB is omitted, so coef len is 1
+            coef_len = 1
+          else
+            # coef MSB is not omitted, so coef len is 2
+            coef_len = 2
+          end
+          coef[w][filt] = []
+          order[w][filt].times do |i|
+            coef[w][filt][i] = @data.getbits(coef_len)
+          end
+        end
+      end
+    end
+  end
+
+  def gain_control_data
+    max_band = @data.getbits(2)
+    window_sequence = @ics[:window_sequence]
+    
+    adjust_num = []
+    alevcode = []
+    aloccode = []
+
+    if window_sequence == ONLY_LONG_SEQUENCE
+      1.upto(max_band) do |bd|
+        adjust_num[bd] = []
+        alevcode[bd] = []
+        aloccode[bd] = []
+        1.times do |wd|
+          adjust_num[bd][wd] = @data.getbits(3)
+          alevcode[bd][wd] = []
+          aloccode[bd][wd] = []
+          adjust_num[bd][wd].times do |ad|
+            alevcode[bd][wd][ad] = @data.getbits(4)
+            aloccode[bd][wd][ad] = @data.getbits(5)
+          end
+        end
+      end
+    elsif window_sequence == LONG_START_SEQUENCE
+      1.upto(max_band) do |bd|
+        adjust_num[bd] = []
+        alevcode[bd] = []
+        aloccode[bd] = []
+        2.times do |wd|
+          adjust_num[bd][wd] = @data.getbits(3)
+          alevcode[bd][wd] = []
+          aloccode[bd][wd] = []
+          adjust_num[bd][wd].times do |ad|
+            alevcode[bd][wd][ad] = @data.getbits(4)
+            if wd == 0
+              aloccode[bd][wd][ad] = @data.getbits(4)
+            else
+              aloccode[bd][wd][ad] = @data.getbits(2)
+            end
+          end
+        end
+      end
+    elsif window_sequence == EIGHT_SHORT_SEQUENCE
+      1.upto(max_band) do |bd|
+        adjust_num[bd] = []
+        alevcode[bd] = []
+        aloccode[bd] = []
+        8.times do |wd|
+          adjust_num[bd][wd] = @data.getbits(3)
+          alevcode[bd][wd] = []
+          aloccode[bd][wd] = []
+          adjust_num[bd][wd].times do |ad|
+            alevcode[bd][wd][ad] = @data.getbits(4)
+            aloccode[bd][wd][ad] = @data.getbits(2)
+          end
+        end
+      end
+    elsif window_sequence == LONG_STOP_SEQUENCE
+      1.upto(max_band) do |bd|
+        adjust_num[bd] = []
+        alevcode[bd] = []
+        aloccode[bd] = []
+        2.times do |wd|
+          adjust_num[bd][wd] = @data.getbits(3)
+          alevcode[bd][wd] = []
+          aloccode[bd][wd] = []
+          adjust_num[bd][wd].times do |ad|
+            alevcode[bd][wd][ad] = @data.getbits(4)
+            if wd == 0
+              aloccode[bd][wd][ad] = @data.getbits(4)
+            else
+              aloccode[bd][wd][ad] = @data.getbits(5)
+            end
+          end
+        end
+      end
+    end
+  end
+
+  def spectral_data
+    @ics[:num_window_groups].times do |g|
+      @num_sec[g].times do |i|
+        if @sect_cb[g][i] != ZERO_HCB && @sect_cb[g][i] != NOISE_HCB && @sect_cb[g][i] != INTENSITY_HCB && @sect_cb[g][i] != INTENSITY_HCB2
+          k = @sect_sfb_offset[g][@sect_start[g][i]]
+          while k < @sect_sfb_offset[g][@sect_end[g][i]]
+            if @sect_cb[g][i] < FIRST_PAIR_HCB
+              puts "CODEBOOK: #{@sect_cb[g][i]}"
+              # hcod[@sect_cb[g][i]][w][x][y][z] = @data.vlclbf
+              # if (unsigned_cb[@sect_cb[g][i]])
+              #   quad_sign_bits = @data.bslbf
+              # end
+              k += QUAD_LEN
+            else
+              puts "CODEBOOK: #{@sect_cb[g][i]}"
+              # hcod[@sect_cb[g][i]][y][z] = @data.vlclbf
+              # if unsigned_cb[@sect_cb[g][i]]
+              #   pair_sign_bits = @data.bslbf
+              # end
+              k += PAIR_LEN
+              # if @sect_cb[g][i] == ESC_HCB
+              #   if y == ESC_FLAG
+              #     hcod_esc_y = @data.vlclbf
+              #   end
+              #   if z == ESC_FLAG
+              #     hcod_esc_z = @data.vlclbf
+              #   end
+              # end
+            end
+          end
+        end
+      end
+    end
+  end
+end
+
+
+
+
+def decode_script_data(data, prefix = '', cur_pos = 0)
+  data_type = data[cur_pos]
+  cur_pos += 1
+    
+  case data_type
+  when 0
+    # DOUBLE
+    value = data[cur_pos,8].unpack('G').first
+    cur_pos += 8
+    puts "#{prefix}DOUBLE: #{value}"
+
+  when 1
+    value = data[cur_pos]
+    cur_pos += 1
+    puts "#{prefix}BOOLEAN: #{value == 0 ? 'false' : 'true'}"
+
+  when 2
+    len = data[cur_pos,2].unpack('n').first
+    cur_pos += 2
+    if len > 0
+      value = data[cur_pos, len]
+      cur_pos += len
+    else
+      value = ''
+    end
+    puts "#{prefix}STRING (#{len}): #{value}"
+
+  when 3
+    puts "#{prefix}Object:"
+    while cur_pos < data.length
+      name_len = data[cur_pos,2].unpack('n').first
+      cur_pos += 2
+      if name_len == 0
+        name = ''
+        if data[cur_pos] == 9
+          # End of array.
+          break
+        end
+      else
+        name = data[cur_pos, name_len]
+      end
+      cur_pos += name_len
+        
+      puts "#{prefix}  #{name}"
+      cur_pos = decode_script_data(data, prefix + '    ', cur_pos)
+
+      break if cur_pos.nil?
+    end
+
+  when 7
+    value = data[cur_pos,2].unpack('n').first
+    cur_pos += 2
+    puts "#{prefix}REFERENCE: #{value}"
+
+  when 11
+    # DATE
+    value = data[cur_pos,8].unpack('G').first    
+    cur_pos += 8
+    local_time_offset = data[cur_pos, 2].unpack('s').first
+    cur_pos += 2
+    puts "#{prefix}DATE: #{value} (ms since Jan 1, 1970, UTC), time offset: #{local_time_offset} (may be wrong-endian!)"
+
+  when 12
+    # LONG STRING
+    len = data[cur_pos,4].unpack('N').first
+    cur_pos += 4
+    if len > 0
+      value = data[cur_pos, len]
+      cur_pos += len
+    else
+      value = ''
+    end
+    puts "#{prefix}LONGSTRING (#{len}): #{value}"
+
+  when 10
+    array_len = data[cur_pos,4].unpack('N').first
+    cur_pos += 4
+    puts "#{prefix}Strict array (length = #{array_len})"
+      
+    array_len.times do |i|
+      puts "#{prefix}  Index #{i}"
+      cur_pos = decode_script_data(data, prefix + '    ', cur_pos)
+
+      break if cur_pos.nil?
+    end
+
+  when 8
+    array_len = data[cur_pos,4].unpack('N').first
+    cur_pos += 4
+    puts "#{prefix}ECMA array (length = #{array_len})"
+      
+    array_len.times do |i|
+      name_len = data[cur_pos,2].unpack('n').first
+      cur_pos += 2
+      if name_len == 0
+        name = ''
+        if data[cur_pos] == 9
+          # End of array.
+          break
+        end
+      else
+        name = data[cur_pos, name_len]
+      end
+      cur_pos += name_len
+        
+      puts "#{prefix}  #{name}"
+      cur_pos = decode_script_data(data, prefix + '    ', cur_pos)
+
+      break if cur_pos.nil?
+    end      
+      
+  else
+    puts "#{prefix}Unsupported data type #{data_type} found!"
+    return nil
+  end
+
+  return cur_pos
+end
+
+
+tag_kinds = {
+  8 => 'audio',
+  9 => 'video',
+  18 => 'script'
+}
+audio_formats = {
+  0 => 'pcm, platform endian',
+  1 => 'adpcm',
+  2 => 'mp3',
+  3 => 'pcm, little endian',
+  4 => 'nellymoser 16-kHz',
+  5 => 'nellymoser 8-kHz',
+  6 => 'nellymoser',
+  7 => 'G.711 a-law',
+  8 => 'G.711 mu-law',
+  9 => 'reserved',
+  10 => 'aac',
+  11 => 'speex',
+  14 => 'mp3 8-kHz',
+  15 => 'device-specific'
+}
+video_frame_types = {
+  1 => 'keyframe',
+  2 => 'inter frame',
+  3 => 'disposable inter frame',
+  4 => 'generated keyframe',
+  5 => 'video info/command frame'
+}
+video_codecs = {
+  1 => 'jpeg',
+  2 => 'h.263',
+  3 => 'screen video',
+  4 => 'vp6',
+  5 => 'vp6a',
+  6 => 'screen video 2',
+  7 => 'avc'
+}
+
+mpeg4_audio_object_types = {
+  0 => "Null",
+  1 => "AAC Main",
+  2 => "AAC LC (Low Complexity)",
+  3 => "AAC SSR (Scalable Sample Rate)",
+  4 => "AAC LTP (Long Term Prediction)",
+  5 => "SBR (Spectral Band Replication)",
+  6 => "AAC Scalable",
+  7 => "TwinVQ",
+  8 => "CELP (Code Excited Linear Prediction)",
+  9 => "HXVC (Harmonic Vector eXcitation Coding)",
+  10 => "Reserved",
+  11 => "Reserved",
+  12 => "TTSI (Text-To-Speech Interface)",
+  13 => "Main Synthesis",
+  14 => "Wavetable Synthesis",
+  15 => "General MIDI",
+  16 => "Algorithmic Synthesis and Audio Effects",
+  17 => "ER (Error Resilient) AAC LC",
+  18 => "Reserved",
+  19 => "ER AAC LTP",
+  20 => "ER AAC Scalable",
+  21 => "ER TwinVQ",
+  22 => "ER BSAC (Bit-Sliced Arithmetic Coding)",
+  23 => "ER AAC LD (Low Delay)",
+  24 => "ER CELP",
+  25 => "ER HVXC",
+  26 => "ER HILN (Harmonic and Individual Lines plus Noise)",
+  27 => "ER Parametric",
+  28 => "SSC (SinuSoidal Coding)",
+  29 => "PS (Parametric Stereo)",
+  30 => "MPEG Surround",
+  31 => "(Escape value)",
+  32 => "Layer-1",
+  33 => "Layer-2",
+  34 => "Layer-3",
+  35 => "DST (Direct Stream Transfer)",
+  36 => "ALS (Audio Lossless)",
+  37 => "SLS (Scalable LosslesS)",
+  38 => "SLS non-core",
+  39 => "ER AAC ELD (Enhanced Low Delay)",
+  40 => "SMR (Symbolic Music Representation) Simple",
+  41 => "SMR Main",
+  42 => "USAC (Unified Speech and Audio Coding) (no SBR)",
+  43 => "SAOC (Spatial Audio Object Coding)",
+  44 => "LD MPEG Surround",
+  45 => "USAC"
+}
+
+mpeg4_audio_frequencies = {
+  0 => "96000",
+  1 => "88200",
+  2 => "64000",
+  3 => "48000",
+  4 => "44100",
+  5 => "32000",
+  6 => "24000",
+  7 => "22050",
+  8 => "16000",
+  9 => "12000",
+  10 => "11025",
+  11 => "8000",
+  12 => "7350",
+  13 => "Reserved",
+  14 => "Reserved"
+}
+
+mpeg4_channel_configurations = {
+  0 => "Defined in AOT Specifc Config",
+  1 => "1 channel: Center",
+  2 => "2 channels: Left, Right",
+  3 => "3 channels: Center, Left, Right",
+  4 => "4 channels: C, L, R rear_C",
+  5 => "5 channels: C, L, R rear_L, rear_R",
+  6 => "6 channels: C, L, R rear_L, rear_R, LFE",
+  7 => "8 channels: C, L, R side_L, side_R, rear_L, rear_R, LFE"
+}
+
+expect_ffmpeg_trailing_bytes = false
+
+error "Please specify a file to inspect." unless ARGV.length > 0
+
+input_filename = ARGV.first
+error "Input file not found." unless File.exist?(input_filename)
+
+file_size = File.size(input_filename)
+input_file = File.open(input_filename)
+
+signature = input_file.read(3)
+error "Not an FLV file." unless signature == 'FLV'
+
+puts
+puts "INFO:"
+puts "Filename: " + File.basename(input_filename)
+puts "Size: #{file_size}"
+
+puts
+puts "HEADER:"
+
+version = input_file.ui8
+puts "Version: #{version}"
+
+flags = input_file.ui8
+puts "Has audio tags: " + ((flags & 0x4 > 0) ? 'yes' : 'no')
+puts "Has video tags: " + ((flags & 0x1 > 0) ? 'yes' : 'no')
+if (flags & 0b11111010) > 0
+  puts "WARNING: reserved flag bits are not zero!"
+end
+
+data_loc = input_file.ui32
+puts "Data offset: #{data_loc}"
+
+puts
+puts "BODY:"
+
+more_to_read = true
+while more_to_read
+
+  prev_tag_size = input_file.ui32
+
+  if input_file.eof?
+    puts "LASTTAG:"
+    puts "  Prev tag size: #{prev_tag_size}"
+
+    more_to_read = false
+    next
+  end
+
+  kind = input_file.ui8
+  size = input_file.ui24
+  timestamp = input_file.ui24
+  timestamp_ext = input_file.ui8
+  full_timestamp = timestamp_ext*(2**24) + timestamp
+  stream_id = input_file.ui24
+
+  kind_name = tag_kinds[kind] || 'unknown'
+
+  if expect_ffmpeg_trailing_bytes
+    expect_ffmpeg_trailing_bytes = false
+
+    if kind == 0
+      puts "LASTTAG:"
+      puts "  Prev tag size: #{prev_tag_size}"
+
+      puts "FFMPEG TRAILING VALUES:"
+      duration_double = (size << 40) + (timestamp << 16) + (timestamp_ext << 8) + (stream_id >> 16)
+      puts "  Duration: %0.4f"% [duration_double >> 32, duration_double & (2**32-1)].pack('NN').unpack('G').first
+
+      size_double = ((stream_id & 0xff) << 56) + (input_file.ui32 << 24) + input_file.ui24
+
+      puts "  Size: %0.4f"% [size_double >> 32, size_double & (2**32-1)].pack('NN').unpack('G').first
+
+      # Should now be the end of the file.  But if it's not, at least give a warning.
+      if input_file.eof?
+        more_to_read = false
+      else
+        puts
+        puts "UNKNOWN DATA FOLLOWING"
+      end
+
+      next
+    end
+  end
+
+  puts "TAG: (offset #{input_file.pos})"
+  puts "  Prev tag size: #{prev_tag_size}"  
+  puts "  Type: #{kind} (#{kind_name})"
+  puts "  Size: #{size}"
+  puts "  Time: #{full_timestamp / 1000.0}"
+  puts "  Stream ID: #{stream_id}"
+
+  next if size == 0
+
+  if kind_name == 'audio'
+    format_flags = input_file.ui8
+    format = (format_flags >> 4) & 15
+    rate = (2 ** ((format_flags >> 2) & 3) * 5512.5).round
+    bits = ((format_flags >> 1) & 1) * 8 + 8
+    channels = format_flags & 1 + 1
+    puts "  Audio format: #{format} (#{audio_formats[format] || 'unknown'})"
+    puts "  Audio rate: #{rate}"
+    puts "  Audio bits: #{bits}"
+    puts "  Audio channels: #{channels}"
+
+    if format == 10
+      packet_type = input_file.ui8
+      puts "  Audio packet type: #{packet_type} (#{packet_type == 0 ? 'sequence header' : 'raw'})"
+      audio_specific_config = input_file.read(size - 2)
+      if packet_type == 0
+        if audio_specific_config.length >= 2
+          asc = Bitstream.new(audio_specific_config)
+          audio_object_type = asc.getbits(5)
+          if audio_object_type == 31
+            audio_object_type = asc.getbits(6) + 32 # Extended object type
+          end
+          puts "    Audio Object Type: #{audio_object_type} - #{mpeg4_audio_object_types[audio_object_type]}"
+
+          frequency_index = asc.getbits(4)
+          if frequency_index == 15
+            frequency = asc.getbits(24) # Extended frequency
+          else
+            frequency = mpeg4_audio_frequencies[frequency_index]
+          end
+          puts "    Sampling Frequency: #{frequency}"
+          
+          channel_config = asc.getbits(4)
+          puts "    Channel Config: #{mpeg4_channel_configurations[channel_config]}"
+
+          # Check for extension data.
+          extension_object_type = 0
+          sbr_present_flag = 0
+          ps_present_flag = 0
+          extension_sampling_frequency_index = -1
+          extension_sampling_frequency = -1
+          if audio_object_type == 5 || audio_object_type == 29
+            extension_object_type = 5
+            sbr_present_flag = 1
+            ps_present_flag = 1 if audio_object_type == 29
+            extension_sampling_frequency_index = asc.getbits(4)
+            if extension_sampling_frequency_index == 0xf
+              extension_sampling_frequency = asc.getbits(24)
+            else
+              extension_sampling_frequency = mpeg4_audio_frequencies[extension_sampling_frequency_index]
+            end
+            puts "    Extension sampling frequency: #{extension_sampling_frequency}"
+
+            audio_object_type = asc.getbits(5)
+            if audio_object_type == 31
+              audio_object_type = asc.getbits(6) + 32 # Extended object type
+            end
+            puts "    Updated Audio Object Type: #{audio_object_type} - #{mpeg4_audio_object_types[audio_object_type]}"
+            puts "    SBR Present: #{sbr_present_flag}"
+            puts "    PS Present: #{ps_present_flag}"
+            
+          end
+
+          if audio_object_type == 2 # Or a bunch of others
+            # GASpecificConfig
+            frame_length_flag = asc.getbits(1)
+            depends_on_core_coder = asc.getbits(1)
+            if depends_on_core_coder == 1
+              core_coder_delay = asc.getbits(14)
+              puts "    Core coder delay: #{core_coder_delay}"
+            end
+            extension_flag = asc.getbits(1)
+            if channel_config == 0
+              puts "ERROR: Reading channel config from PCE is not currently supported."
+              # Should read program_config_element here.
+            end
+            if audio_object_type == 6 || audio_object_type == 20
+              layer_nr = asc.getbits(3)
+            end
+            if extension_flag == 1
+              if audio_object_type == 22
+                num_of_sub_frame = asc.getbits(5)
+                layer_length = asc.getbits(11)
+              end
+              if [17,19,20.23].include?(audio_object_type)
+                aac_section_data_resilience_flag = asc.getbits(1)
+                aac_scalefactor_data_resilience_flag = asc.getbits(1)
+                aac_spectral_data_resilience_flag = asc.getbits(1)
+              end
+              extension_flag_3 = asc.getbits(1)
+              if extension_flag_3 == 1
+                # Not yet defined!  Yay!
+                puts "ERROR: Undefined version 3 data."
+              end
+            end
+          end
+
+          if extension_object_type != 5 && asc.remaining_bits >= 16
+            sync_extension_type = asc.getbits(11)
+            if sync_extension_type == 0x2b7
+
+              extension_object_type = asc.getbits(5)
+              if extension_object_type == 31
+                extension_object_type = asc.getbits(6) + 32 # Extended object type
+              end
+
+              if extension_object_type == 5
+                sbr_present_flag = asc.getbits(1)
+                if sbr_present_flag == 1
+                  extension_sampling_frequency_index = asc.getbits(4)
+                  if extension_sampling_frequency_index == 0xf
+                    extension_sampling_frequency = asc.getbits(24)
+                  else
+                    extension_sampling_frequency = mpeg4_audio_frequencies[extension_sampling_frequency_index]
+                  end
+                  puts "    Extension sampling frequency: #{extension_sampling_frequency}"
+                  if asc.remaining_bits >= 12
+                    sync_extension_type = asc.getbits(11)
+                    if sync_extension_type == 0x548
+                      ps_present_flag = 1
+                    end
+                  end
+                end
+              end
+            end
+            puts "    SBR Present: #{sbr_present_flag}"
+            puts "    PS Present: #{ps_present_flag}"
+          end
+
+        else
+          puts "    ERROR: AudioSpecificConfig too small! Assuming stream info is accurate."
+        end
+
+      else
+        AacFrameDecoder.new(audio_specific_config, 1, 44100, 1)
+      end
+    else
+      input_file.read(size - 1)
+    end
+    
+
+  elsif kind_name == 'video'
+    format_flags = input_file.ui8
+    frame_type = (format_flags >> 4) & 15
+    codec_id = format_flags & 0xf
+    
+    puts "  Video frame type: #{frame_type} (#{video_frame_types[frame_type] || 'unknown'})"
+    puts "  Video codec: #{codec_id} (#{video_codecs[codec_id] || 'unknown'})"
+    
+    if codec_id == 4 #&& frame_type == 1 # vp6 keyframe
+      stream_bytes = input_file.read(9)
+
+      vp6_frame_mode = (stream_bytes[1] >> 7) & 1
+      vp6_q_param = (stream_bytes[1] >> 1) & 0b00111111
+      vp6_marker = stream_bytes[1] & 1
+      
+      puts "  VP6 Frame Mode: #{vp6_frame_mode}"
+      puts "  VP6 Q Param: #{vp6_q_param}"
+      puts "  VP6 Marker: #{vp6_marker} (#{vp6_marker == 1 ? 'VP60' : 'VP61/VP62'})"
+
+      offset = 2
+      # if frame_mode==0, there's an extra byte of data.
+      if vp6_frame_mode == 0
+        vp6_version = (stream_bytes[2] >> 3) & 0b00011111
+        vp6_version2 = (stream_bytes[2] >> 1) & 3
+        vp6_interlaced = stream_bytes[2] & 1
+        
+        puts "  VP6 Version: #{vp6_version}"
+        puts "  VP6 Version2: #{vp6_version2}"
+        puts "  VP6 Interlaced: #{vp6_interlaced}"
+
+        offset += 1
+
+        # if marker==1 or version2==0, there are 2 more extra data bytes
+        if vp6_marker == 1 || vp6_version2 == 0
+          vp6_secondary_buffer_offset = stream_bytes[offset] << 8 + stream_bytes[offset + 1]
+          puts "  VP6 Secondary Buffer Offset: #{vp6_secondary_buffer_offset}"
+
+          offset += 2
+        end
+
+        # Now offset points to the resolution values: [h_mb,w_mb,h_disp,w_disp]
+        enc_width = stream_bytes[offset+1] * 16
+        disp_width = stream_bytes[offset+3] * 16
+        h_adjust = (stream_bytes[0] >> 4) & 15
+
+        enc_height = stream_bytes[offset] * 16
+        disp_height = stream_bytes[offset+2] * 16
+        v_adjust = stream_bytes[0] & 0x0f
+
+        width = disp_width - h_adjust
+        height = disp_height - v_adjust
+
+        if enc_width != disp_width || enc_height != disp_height
+          puts "  Encoded Pixels: #{enc_width}"
+          puts "  Encoded Pixels: #{enc_height}"
+        end
+
+        puts "  Video width: #{width} (#{disp_width} - #{h_adjust})"
+        puts "  Video height: #{height} (#{disp_height} - #{v_adjust})"
+      else
+        if vp6_marker == 1
+          vp6_secondary_buffer_offset = stream_bytes[offset] << 8 + stream_bytes[offset + 1]
+          puts "  VP6 Secondary Buffer Offset: #{vp6_secondary_buffer_offset}"
+        end
+      end
+      
+      
+      input_file.read(size - 10)
+
+    elsif codec_id == 5 && frame_type == 1 # vp6a keyframe
+      stream_bytes = input_file.read(9)
+
+      disp_width = stream_bytes[7] * 16
+      h_adjust = (stream_bytes[0] >> 4) & 15
+      disp_height = stream_bytes[6] * 16
+      v_adjust = stream_bytes[0] & 0x0f
+
+      width = disp_width - h_adjust
+      height = disp_height - v_adjust
+
+      puts "  Video width: #{width} (#{disp_width} - #{h_adjust})"
+      puts "  Video height: #{height} (#{disp_height} - #{v_adjust})"
+
+      input_file.read(size - 10)
+
+    elsif codec_id == 7 # AVC frame
+      packet_type = input_file.ui8
+      bytes_read = 2
+
+      puts "  Packet Type: %s" % ({0 => 'AVC Sequence Header', 1 => 'AVC NALU', 2 => 'AVC end of sequence'}[packet_type] || 'unknown')
+      if packet_type == 1 && size >= 5
+        composition_time = input_file.si24
+        bytes_read += 3
+        puts "  Composition Time Offset: %0.3f" % (composition_time / 1000.0)
+        puts "  PTS: %0.3f" % ((full_timestamp + composition_time) / 1000.0)
+      elsif packet_type == 1
+        puts "  PTS: %0.3f" % (full_timestamp / 1000.0)
+      elsif packet_type == 2
+        # End of Sequence... Might have ffmpeg junk come next
+        expect_ffmpeg_trailing_bytes = true
+      end
+
+      input_file.read(size - bytes_read)
+    else
+
+      input_file.read(size - 1)
+    end
+
+  elsif kind_name == 'script'
+    name_tag_type = input_file.ui8
+    puts "  WARNING: Script tag name is not string type!" unless name_tag_type == 2
+
+    name_len = input_file.ui16
+    # puts "  Script object name length: #{name_len}"
+    name = input_file.read(name_len)
+    puts "  Script object name: #{name}"
+    
+    subsequent_data = input_file.read(size - (name_len + 3))
+    decode_script_data(subsequent_data, '    ')
+  else
+    input_file.read(size)
+  end
+  
+end
+
+
+puts
+close(input_file) rescue nil
