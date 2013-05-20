@@ -16,12 +16,16 @@ class WaveFile
     @data_lenth = 0
     @data_position = nil
     
-    header_num = 0
-    @file.read(36).unpack('a4Va4a4VvvVVvv').each do |value|
+    @file.read(36).unpack('a4Va4a4VvvVVvv').each_with_index do |value, header_num|
       @headers[HEADER_NAMES[header_num]] = value
-      header_num += 1
     end
-    
+
+    # Read any extra trailing data if needed...
+    if @headers[:fmt_size].to_i > 16
+      # We'll just throw it away since we don't know what it is.
+      @file.read(@headers[:fmt_size].to_i - 16)
+    end
+
     # Read the rest of the chunks.
     while !@file.eof?
       chunk_id,chunk_size = @file.read(8).unpack('a4V')
