@@ -552,13 +552,13 @@ class HdlrBox < Box
   end
 
   def print_extra_info(prefix = '')
-    if @handler_qt_type[0] > 0
+    if @handler_qt_type[0,1].unpack('C').first > 0
       print prefix
       cputs "Handler QuickTime Type: #{@handler_qt_type}", :dark_gray
     end
     print prefix
     cputs "Handler Type: #{@handler_type}", :dark_gray
-    if @handler_manufacturer[0] > 0
+    if @handler_manufacturer[0,1].unpack('C').first > 0
       print prefix
       cputs "Handler Manufacturer: #{@handler_manufacturer}", :dark_gray
     end
@@ -2149,7 +2149,7 @@ class AvccSubBox < SubBox
     #
 
     @sps_units.each do |unit_data|
-      header_byte = unit_data[0]
+      header_byte = unit_data[0,1].unpack('C').first
       if header_byte >= 128
         print prefix
         cputs "Invalid nal unit!", :red
@@ -2165,11 +2165,11 @@ class AvccSubBox < SubBox
       i = 1
       while i < nal_size
         if i + 2 < nal_size && unit_data[i,3] == "\x00\x00\x03"
-          clean_data << unit_data[i]
-          clean_data << unit_data[i]
+          clean_data << unit_data[i,1].unpack('C').first
+          clean_data << unit_data[i,1].unpack('C').first
           i += 2
         else
-          clean_data << unit_data[i]
+          clean_data << unit_data[i,1].unpack('C').first
         end
         i += 1
       end

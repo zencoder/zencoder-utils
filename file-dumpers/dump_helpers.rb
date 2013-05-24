@@ -107,7 +107,7 @@ class Bitstream
   attr_accessor :bit_offset, :data
 
   def initialize(data_string, starting_byte_offset = 0)
-    @data = data_string
+    @data = data_string.kind_of?(String) ? data_string.bytes.to_a : data_string
     @bit_offset = 0
     @pos = starting_byte_offset
   end
@@ -147,7 +147,7 @@ class Bitstream
   end
 
   def append(data_string)
-    @data << data_string
+    @data += data_string.bytes.to_a
   end
 
   # Remove any data that we've moved past already, so we don't build up too much in memory.
@@ -172,7 +172,7 @@ class Bitstream
     end
     byte = @bit_offset / 8
     @bit_offset = [@bit_offset + size * 8, @data.length * 8].min
-    @data[byte,size]
+    @data[byte,size].pack('C*')
   end
 
   def remaining_bits

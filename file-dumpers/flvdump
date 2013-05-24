@@ -4,81 +4,13 @@
 # FLV Dump
 #
 
+$:.unshift(File.dirname(__FILE__))
+require 'dump_helpers'
+
 def error(msg); puts msg; exit; end
 
-class IO
-  def ui8; read(1).unpack('C').first; end
-  def ui16; read(2).unpack('n').first; end
-  def ui32; read(4).unpack('N').first; end
-  def ui24; ("\000" + read(3)).unpack('N').first; end
-  def si24; v = ui24; v >= (2**23) ? v-(2**24) : v; end
-end
-
-class Bitstream
-  attr_accessor :bit_offset
-  
-  def initialize(data_string, starting_byte_offset = 0)
-    @data = data_string
-    @bit_offset = 0
-    @pos = starting_byte_offset
-  end
-
-  def nextbits(count)
-    raise "nextbits of more than 16 not implemented" if count > 16
-    getbits_internal(count, false)
-  end
-
-  def remaining_bits
-    @data.length * 8 - @bit_offset
-  end
-
-  # Return an integer of the next _count_ bits and increment @bit_offset so that
-  # subsequent calls will get following bits.
-  def getbits(count)
-    value = 0
-    while count > 16
-      value += (getbits_internal(16) << 16)
-      count -= 16
-    end
-    value += getbits_internal(count)
-  end
-  
-  # Do getbits, with up to 16 bits.
-  def getbits_internal(count, increment_position = true)
-    return 0 if count > 16 || count < 1
-    byte = @bit_offset / 8
-    bit  = @bit_offset % 8
-    val = (@data[@pos + byte].to_i << 16) + (@data[@pos + byte + 1].to_i << 8) + @data[@pos + byte + 2].to_i
-    val = (val << bit) & 16777215
-    val = val >> (24 - count)
-
-    @bit_offset += count if increment_position
-    return val
-  end
-  
-  def append(data_string)
-    @data << data_string
-  end
-  
-  # Remove any data that we've moved past already, so we don't build up too much in memory.
-  def pop
-    byte = @bit_offset / 8
-    bit = @bit_offset % 8
-    
-    @pos += byte
-    @bit_offset = bit
-    
-    if @pos > 0
-      @data = @data[@pos..-1]
-      @pos = 0
-    end
-    
-    true
-  end
-end
-
 def decode_script_data(data, prefix = '', cur_pos = 0)
-  data_type = data[cur_pos]
+  data_type = data[cur_pos,1].unpack('C').first
   cur_pos += 1
     
   case data_type
@@ -89,7 +21,7 @@ def decode_script_data(data, prefix = '', cur_pos = 0)
     puts "#{prefix}DOUBLE: #{value}"
 
   when 1
-    value = data[cur_pos]
+    value = data[cur_pos,1].unpack('C').first
     cur_pos += 1
     puts "#{prefix}BOOLEAN: #{value == 0 ? 'false' : 'true'}"
 
@@ -111,7 +43,7 @@ def decode_script_data(data, prefix = '', cur_pos = 0)
       cur_pos += 2
       if name_len == 0
         name = ''
-        if data[cur_pos] == 9
+        if data[cur_pos,1].unpack('C').first == 9
           # End of array.
           cur_pos += 1
           break
@@ -174,7 +106,7 @@ def decode_script_data(data, prefix = '', cur_pos = 0)
       cur_pos += 2
       if name_len == 0
         name = ''
-        if data[cur_pos] == 9
+        if data[cur_pos,1].unpack('C').first == 9
           # End of array.
           break
         end
@@ -556,7 +488,7 @@ while more_to_read
     puts "  Video codec: #{codec_id} (#{video_codecs[codec_id] || 'unknown'})"
     
     if codec_id == 4 #&& frame_type == 1 # vp6 keyframe
-      stream_bytes = input_file.read(9)
+      stream_bytes = input_file.read(9).bytes.to_a
 
       vp6_frame_mode = (stream_bytes[1] >> 7) & 1
       vp6_q_param = (stream_bytes[1] >> 1) & 0b00111111
@@ -617,7 +549,7 @@ while more_to_read
       input_file.read(size - 10)
 
     elsif codec_id == 5 && frame_type == 1 # vp6a keyframe
-      stream_bytes = input_file.read(9)
+      stream_bytes = input_file.read(9).bytes.to_a
 
       disp_width = stream_bytes[7] * 16
       h_adjust = (stream_bytes[0] >> 4) & 15
