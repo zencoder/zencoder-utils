@@ -1,5 +1,5 @@
 #/usr/bin/env ruby
-
+require 'thread'
 require 'digest'
 
 def numeric_arg_with_default(default_value)
@@ -277,9 +277,15 @@ class RTMPLog
   end
 end
 
+def tputs(msg)
+  puts Time.now.strftime('%Y-%m-%d %H:%M:%S - ') + msg.to_s
+end
+
 #####################################################
 #####################################################
 #####################################################
+
+tputs "LATENCY GRAPHER STARTED"
 
 # Clear out any environment options.
 if ARGV.first == '-e'
@@ -304,42 +310,45 @@ end
 job = Job.find_by_id(@job_id)
 raise "Job #{@job_id} not found!" unless job
 
-input_log = get_log(job.input_media_file, 'input', 'download/download.log')
-output_logs = job.output_media_files.map { |o| [o.label, get_log(o, 'output', 'transcode/upload.log')] }
+tputs "GATHERING LOGS"
 
-puts "Got input log: #{input_log}"
-output_logs.each do |log_info|
-  puts "Got output log '#{log_info[0]}': #{log_info[1]}"
+@all_logs = {}
+threads = []
+threads << Thread.new { @all_logs["Input #{job.input_media_file.id}"] = get_log(job.input_media_file, 'input', 'download/download.log') }
+job.output_media_files.each do |o|
+  threads << Thread.new { @all_logs["Output #{o.id}: #{o.label}"] = get_log(o, 'output', 'transcode/upload.log') }
 end
+threads.each { |t| t.join }
 
-all_logs = [['Input', input_log]] + output_logs.sort_by { |ol| ol.first.to_s }
+tputs "DONE GATHERING LOGS"
 
-# def finish_graph
-# def finish_html_output
-# def output_graph_data(rtmplog)
-# def start_graph(title)
-# def start_html_output
+@all_logs.keys.sort.each do |key|
+  puts "Got log #{key} -- #{@all_logs[key]}"
+end
 
 @output_stream = File.open('live_job_latency_graph.html','w')
 start_html_output
 
-all_logs.each do |log_info|
-  rtmplog = RTMPLog.new(log_info[1])
+tputs "ANALYZING LOGS"
+@all_logs.keys.sort.each do |key|
+  rtmplog = RTMPLog.new(@all_logs[key])
   if rtmplog.valid?
-    start_graph(log_info[0])
+    start_graph(key)
     output_graph_data(rtmplog)
     finish_graph
   end
 end
+tputs "DONE ANALYZING LOGS"
 
 finish_html_output
 @output_stream.close
 
+tputs "CLEANING UP"
 # Cleanup
-File.unlink(input_log)
-output_logs.each do |log_info|
-  File.unlink(log_info[1]) if log_info[1]
+@all_logs.values.each do |logfile|
+  File.unlink(logfile) if logfile
 end
+tputs "DONE"
 
 
 
