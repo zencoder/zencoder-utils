@@ -391,9 +391,9 @@ start_html_output
 tputs "ANALYZING LOGS"
 @all_logs.keys.sort.each do |key|
   log_info = @all_logs[key]
-  rtmplog = RTMPLog.new(log_info[1])
+  rtmplog = RTMPLog.new(log_info)
   if rtmplog.valid?
-    output_graph_data(log_info[0],rtmplog)
+    output_graph_data(key,rtmplog)
   end
 end
 tputs "DONE ANALYZING LOGS"
