@@ -125,77 +125,80 @@ def start_html_output
   @output_stream.puts "  google.load('visualization', '1', {packages: ['annotatedtimeline']});"
   @output_stream.puts "  var g;"
   @output_stream.puts "  var rtmp_data_set = new Array();"
-  @output_stream.puts "  var event_data_set = new Array();"
+  @output_stream.puts "  var encode_data_set = new Array();"
+  @output_stream.puts "  var rtmp_event_data_set = new Array();"
+  @output_stream.puts "  var encode_event_data_set = new Array();"
   @output_stream.puts
   @output_stream.puts "  function drawVisualization() {"
 end
 
 # Output a data set for 
-def output_graph_data(title,rtmplog)
-  @graph_count += 1
-  @graph_names[@graph_count] = title
-  case @graph_count
-  when 1
-    @output_stream.puts "    // Input dataset"
-    series_name = "Input Latency"
-  else
-    @output_stream.puts "    // Output dataset: #{title}"
-    series_name = "Output Latency"
-  end
+def output_graph_data(title,graph_id,log_type,log,output)
 
-  
   # EVENT DATA
-  event_timestamp_hash = Hash.new
-  @output_stream.puts "    event_data_set[#{@graph_count}] = ["
-  rtmplog.events.each do |event|
-    # add entry to the timestamp map for lookup when processing the RTMP logs
-    event_timestamp_hash[Time.at(event[0].to_f.round)] = "default"
-
-    @output_stream.puts "{"
-    @output_stream.puts "series: \"#{series_name}\","
-    @output_stream.puts "x: \"%s\"," % Time.at(event[0].to_f.round).strftime("%F %TZ")
-    @output_stream.puts "shortText: \"#{event[1].to_s}\","
-    @output_stream.puts "text: \"#{event[1].to_s}\","
-    @output_stream.puts "},"
+  # Concatenate the event labels since Dygraph doesn't support multiple annotations at a single x-axis point
+  annotation_labels = Hash.new
+  log.events.each do |event|
+    current_timestamp = Time.at(event[0].to_f.round)
+    if annotation_labels.key?(current_timestamp) then
+      annotation_labels[current_timestamp] << ", #{event[1].to_s}"
+    else
+      annotation_labels[current_timestamp] = "#{event[1].to_s}"
+    end
   end
-  @output_stream.puts "    ];"
-  @output_stream.puts
 
-  # RTMP DATA
-  @output_stream.puts "    var rtmp_data_#{@graph_count} = new google.visualization.DataTable();"
-  @output_stream.puts "    rtmp_data_#{@graph_count}.addColumn('datetime', 'Time');"
-  @output_stream.puts "    rtmp_data_#{@graph_count}.addColumn('number', '#{series_name}');"
-  @output_stream.puts "    rtmp_data_#{@graph_count}.addRows(["
+  event_timestamp_hash = Hash.new
+  output.puts "    #{log_type}_event_data_set[#{graph_id}] = ["
+  annotation_labels.keys.each do |event_timestamp|
+    # add entry to the timestamp map for lookup when processing the RTMP logs
+    event_timestamp_hash[event_timestamp] = "default"
 
-  assumed_stream_baseline = rtmplog.stream_start_time - [rtmplog.stream_start_delay, rtmplog.max_start_offset / 1000.0].max
-  rtmplog.upload_timings.each do |timing|
+    output.puts "{"
+    output.puts "series: \"#{title}-#{log_type}\","
+    output.puts "x: \"%s\"," % event_timestamp.strftime("%F %TZ")
+    output.puts "shortText: \"%s\"," % annotation_labels[event_timestamp]
+    output.puts "text: \"%s\"," % annotation_labels[event_timestamp]
+    output.puts "},"
+  end
+  output.puts "    ];"
+  output.puts
+
+  # TIMING DATA
+  output.puts "    // debug: stream_start_delay=#{log.stream_start_delay}"
+  output.puts "    // debug: max_start_offset=#{log.max_start_offset}"
+  output.puts "    // debug: stream_start_time=#{log.stream_start_time}"
+  output.puts "    var data_#{log_type}_#{graph_id} = new google.visualization.DataTable();"
+  output.puts "    data_#{log_type}_#{graph_id}.addColumn('datetime', 'Time');"
+  output.puts "    data_#{log_type}_#{graph_id}.addColumn('number', '#{title}-#{log_type}');"
+  output.puts "    data_#{log_type}_#{graph_id}.addRows(["
+
+  assumed_stream_baseline = log.stream_start_time - [log.stream_start_delay, log.max_start_offset / 1000.0].max
+  log.timings.each do |timing|
     latency = (timing[0] - assumed_stream_baseline)-(timing[2]/1000.0)
     # puts "TIMING: #{timing[0]} - #{timing[1]} - #{timing[2]} (#{sprintf('%0.3f', latency)})"
     # case timing[3]
     # when nil
-      # @output_stream.puts "[new Date(%d), %0.3f, undefined]," % [(timing[0].to_f * 1000).round, latency]
+      # output.puts "[new Date(%d), %0.3f, undefined]," % [(timing[0].to_f * 1000).round, latency]
     # else
-    #   @output_stream.puts "[new Date(%d), %0.3f, \"%s\"]," % [(timing[0].to_f * 1000).round, latency, timing[3]]
+    #   output.puts "[new Date(%d), %0.3f, \"%s\"]," % [(timing[0].to_f * 1000).round, latency, timing[3]]
     # end
 
 
-     @output_stream.puts "[new Date(%d), %0.3f]," % [(timing[0].to_f * 1000).round, (latency < 0.0 ? 0 : latency)]
+     output.puts "[new Date(%d), %0.3f]," % [(timing[0].to_f * 1000).round, (latency < 0.0 ? 0 : latency)]
 
      if event_timestamp_hash[Time.at(timing[0].to_f.round)] == "default" then
-       @output_stream.puts "[new Date(%d), %0.3f]," % [timing[0].to_f.round * 1000, (latency < 0.0 ? 0 : latency)]
+       output.puts "[new Date(%d), %0.3f]," % [timing[0].to_f.round * 1000, (latency < 0.0 ? 0 : latency)]
        event_timestamp_hash[Time.at(timing[0].to_f.round)] = "complete"
      end
-
   end
-  @output_stream.puts "    ]);"
-  @output_stream.puts "    rtmp_data_set[#{@graph_count}] = rtmp_data_#{@graph_count};"
+  output.puts "    ]);"
+  output.puts "    #{log_type}_data_set[#{graph_id}] = data_#{log_type}_#{graph_id};"
 end
 
 def finish_html_output
 
   @output_stream.puts
   @output_stream.puts "    g = new Dygraph(document.getElementById(\"visualization\"));"
-  # @output_stream.puts "    g = new google.visualization.AnnotatedTimeLine(document.getElementById(\"visualization\"));"
   @output_stream.puts "    update_graph(2);"
   @output_stream.puts "  }"
   @output_stream.puts
@@ -218,10 +221,21 @@ def finish_html_output
       function change(el) {
         update_graph(el.id);
       }
+
       function update_graph(i) {
-        var merged_data = google.visualization.data.join(rtmp_data_set[1], rtmp_data_set[i], 'full', [[0,0]], [1], [1]);
-        g.updateOptions({ 'file': merged_data, connectSeparatedPoints: true, legend: 'always', axisLabelFontSize: 12, displayAnnotations: true, showRangeSelector: true, valueRange: [0,null] } );
-        g.setAnnotations(event_data_set[1].concat(event_data_set[i]));
+        // combine the RTMP input & RTMP output streams
+        if ((rtmp_data_set[1] != undefined) && (rtmp_data_set[i] != undefined)) {
+          var merged_data = google.visualization.data.join(rtmp_data_set[1], rtmp_data_set[i], 'full', [[0,0]], [1], [1]);
+
+          // If worker latency logs are available, throw those in as well
+          if (encode_data_set[i] != undefined) {
+            merged_data = google.visualization.data.join(merged_data, encode_data_set[i], 'full', [[0,0]], [1,2], [1]);
+          }
+
+          g.updateOptions({ 'file': merged_data, connectSeparatedPoints: true, legend: 'always', axisLabelFontSize: 12, displayAnnotations: true, showRangeSelector: true, valueRange: [0,null] } );
+          var merged_annotations = rtmp_event_data_set[1].concat(rtmp_event_data_set[i]).concat(encode_event_data_set[i]);
+          g.setAnnotations(merged_annotations);
+        }
       }
       </script>"
   @output_stream.puts '</body>
@@ -229,8 +243,165 @@ def finish_html_output
 end
 
 
+# Collection of input stream logs on a Stream Ingest worker node
+#
+class IngestLogs
+  attr_accessor :download_log, :parsed_download_log
+
+  def initialize(download_log)
+    @download_log = download_log
+    @parsed_download_log = RTMPLog.new(download_log)
+  end
+
+  def valid?
+    return @parsed_download_log.valid?
+  end
+
+  def analyze(key, graph_id, output)
+    output_graph_data(key,graph_id,"rtmp",@parsed_download_log, output)
+  end
+
+  def cleanup
+    File.unlink(@download_log) if @download_log
+  end
+end
+
+
+# Collection of job logs for a single output on an Encoding Worker node
+#
+class WorkerLogs
+  attr_accessor :upload_log, :encode_log, :parsed_upload_log, :parsed_encode_log
+
+  def initialize(upload_log, encode_log)
+    @upload_log = upload_log
+    @encode_log = encode_log
+
+    @parsed_upload_log = RTMPLog.new(upload_log)
+    @parsed_encode_log = WorkerLatencyLog.new(encode_log)
+  end
+
+  def valid?
+    return @parsed_upload_log.valid?
+  end
+
+  def analyze(key, graph_id, output)
+    output_graph_data(key,graph_id,"rtmp",@parsed_upload_log, output)
+
+    if @parsed_encode_log.valid?
+      output_graph_data(key,graph_id,"encode",@parsed_encode_log, output)
+    end
+  end
+
+  def cleanup
+    File.unlink(@upload_log) if @upload_log
+    File.unlink(@encode_log) if @encode_log
+  end
+end
+
+
+# Parser for the Worker Latency log file.  Provides accessors to events,
+# stream timing, and other metrics.
+# 
+class WorkerLatencyLog
+  attr_accessor :stream_start_time, :stream_start_delay, :max_start_offset, :timings, :max_stream_time, :max_latency, :events
+  
+  def initialize(filename)
+    @filename = filename
+    parse_log_data if valid?
+  end
+
+  def valid?
+    return !!@valid unless @valid.nil?
+    @valid = log_is_encode_worker_latency?
+  end
+  
+  def log_is_encode_worker_latency?
+    return nil if @filename.nil?
+
+    # Just check if the first bit of the log includes "transcoding"
+    data = File.read(@filename, 2048)
+    data.to_s.include?("encode")
+  end
+
+  def parse_timestamp(line)
+    if line =~ /\[(\d+-\d+-\d+ \d+:\d+:\d+\.\d+)\]/
+      Time.parse($1 + ' -0000')
+    end
+  end
+
+  def parse_log_data
+    logfile = File.open(@filename, 'r')
+
+    @events = []
+    @timings = []
+    @max_start_offset = 0
+    @line_count = 0
+    @stream_start_delay = 0
+    @stream_start_time = nil
+    @last_stream_time = 0
+
+
+    while line = logfile.gets
+      @line_count += 1
+      # Ignore comments
+      next if line =~ /^#/
+      # line_timestamp = parse_timestamp(line)
+
+      case line
+        when /^(.+) INFO -- (.+)$/
+
+          # parse the JSON data from the log line
+          log_stats = eval($2)
+
+          if log_stats['encode'] != nil then
+
+            cur_time = log_stats['encode']['cur_time'].to_f
+            if @stream_start_time.nil? then
+              @stream_start_time = log_stats['encode']['start_time'].to_f
+              @events << [cur_time, :started_encoding]
+            end
+            @last_stream_time = log_stats['encode']['stream_time'].to_f * 1000
+            @timings << [cur_time, @stream_start_time, @last_stream_time, nil]
+          end
+        end
+      end
+      logfile.close
+
+      # look for the baseline in the collected timing info
+      prev_cur_time = nil
+      prev_stream_time = nil
+      @timings.each do |timing|
+        cur_time = timing[0]
+        stream_time = (timing[2] / 1000)
+
+        # only evaluate cases where the difference between timestamps is more than one second
+        if prev_cur_time.nil?
+          prev_cur_time = cur_time
+          prev_stream_time = stream_time
+        else
+          cur_time_delta = cur_time - prev_cur_time
+          if (cur_time_delta > 0.5)
+            if cur_time_delta > (stream_time - prev_stream_time)
+              # found the baseline, where we're transcoding slower than realtime
+              @stream_start_time = cur_time - stream_time
+              break
+            end
+
+            prev_stream_time = stream_time
+            prev_cur_time = cur_time
+          end
+        end
+      end
+    end
+  end
+
+
+
+# Parser for the RTMP upload/download log files.  Provides accessors to events,
+# stream timing, and other metrics.
+#
 class RTMPLog
-  attr_accessor :stream_start_time, :stream_start_delay, :max_start_offset, :upload_timings, :max_stream_time, :events
+  attr_accessor :stream_start_time, :stream_start_delay, :max_start_offset, :timings, :max_stream_time, :max_latency, :events
   
   def initialize(filename)
     @filename = filename
@@ -259,7 +430,7 @@ class RTMPLog
     logfile = File.open(@filename, 'r')
 
     @events = []
-    @upload_timings = []
+    @timings = []
     @first_timestamp_seen = nil
     @last_timestamp_seen = nil
     @max_start_offset = 0
@@ -280,10 +451,10 @@ class RTMPLog
       case line
         when /WARNING: Auth failed/
           @events << [line_timestamp, time, stream_time]
-          @upload_timings << [line_timestamp, stream_start_time, @last_stream_time, nil]
+          @timings << [line_timestamp, stream_start_time, @last_stream_time, nil]
         when /DEBUG: Invoking FCPublish/
           @events << [line_timestamp, :fc_publish]
-          @upload_timings << [line_timestamp, stream_start_time, @last_stream_time, nil]
+          @timings << [line_timestamp, stream_start_time, @last_stream_time, nil]
 
         when /INFO: STREAM_START (\d+)/
           stream_start_time = $1.to_i
@@ -291,48 +462,38 @@ class RTMPLog
           @stream_start_time = line_timestamp
           @stream_start_delay = (line_timestamp - @first_timestamp_seen)
           @events << [line_timestamp, :started_streaming]
-          @upload_timings << [line_timestamp, stream_start_time, 0, nil]
+          @timings << [line_timestamp, stream_start_time, 0, nil]
           @last_time = line_timestamp
         when /DEBUG: New start time offset: (\d+)/
           @max_start_offset = $1.to_i
         when /INFO: TIME (\d+) OFFSET (\d+) STREAM_TIME (\d+)/
           time,offset,stream_time = [$1.to_i, $2.to_i, $3.to_i]
-          @upload_timings << [line_timestamp, time, stream_time, nil]
+          @timings << [line_timestamp, time, stream_time, nil]
           @last_time = time
           @last_stream_time = stream_time
         when /WARNING: WriteN, RTMP send error/
           @events << [line_timestamp, :send_error]
-          @upload_timings << [line_timestamp, stream_start_time, @last_stream_time, nil]
+          @timings << [line_timestamp, stream_start_time, @last_stream_time, nil]
         when /ERROR: disconnected from remote server/
           @events << [line_timestamp, :disconnect]
-          @upload_timings << [line_timestamp, stream_start_time, @last_stream_time, nil]
+          @timings << [line_timestamp, stream_start_time, @last_stream_time, nil]
         when /INFO: send_data, done sending/
           @events << [line_timestamp, :done]
-          @upload_timings << [line_timestamp, stream_start_time, @last_stream_time, nil]
-
+          @timings << [line_timestamp, stream_start_time, @last_stream_time, nil]
+        end
       end
-    end
-    logfile.close
 
-    # puts "Line count: #{@line_count}"
-    # puts "First timestamp: #{@first_timestamp_seen}"
-    # puts "Max start offset: #{@max_start_offset}"
-    # 
-    # @events.each do |event|
-    #   puts "EVENT: #{event[0]} - #{event[1]}"
-    # end
+      logfile.close
 
-    assumed_stream_baseline = @stream_start_time - [@stream_start_delay, @max_start_offset / 1000.0].max
+      assumed_stream_baseline = @stream_start_time - [@stream_start_delay, @max_start_offset / 1000.0].max
 
-    @max_latency = 0.0
-    @max_stream_time = 0
-    @upload_timings.each do |timing|
+      @max_latency = 0.0
+      @max_stream_time = 0
+      @timings.each do |timing|
       latency = (timing[0] - assumed_stream_baseline)-(timing[2]/1000.0)
-      # puts "TIMING: #{timing[0]} - #{timing[1]} - #{timing[2]} (#{sprintf('%0.3f', latency)})"
       @max_latency = latency if latency > @max_latency
       @max_stream_time = timing[2] if timing[2] > @max_stream_time
     end
-  
   end
 end
 
@@ -372,10 +533,23 @@ raise "Job #{@job_id} not found!" unless job
 tputs "GATHERING LOGS"
 
 @all_logs = {}
-threads = []
-threads << Thread.new { @all_logs["Input #{job.input_media_file.id}"] = get_log(job.input_media_file, 'input', 'download/download.log') }
+@all_logs["Input #{job.input_media_file.id}"] = IngestLogs.new(get_log(job.input_media_file, 'input', 'download/download.log'))
+
+# add all output jobs to the queue
+queue = Queue.new
 job.output_media_files.each do |o|
-  threads << Thread.new { @all_logs["Output #{o.id}: #{o.label}"] = get_log(o, 'output', 'transcode/upload.log') }
+  queue << o
+end
+
+# create threads to process the output logs in parallel
+threads = []
+2.times do  | i |
+  threads << Thread.new { 
+    until queue.empty?
+      o = queue.pop
+      @all_logs["Output #{o.id}: #{o.label}"] = WorkerLogs.new(get_log(o, 'output', 'transcode/upload.log'), get_log(o, 'output', 'transcode/latency.log'))
+    end
+  }
 end
 threads.each { |t| t.join }
 
@@ -391,9 +565,10 @@ start_html_output
 tputs "ANALYZING LOGS"
 @all_logs.keys.sort.each do |key|
   log_info = @all_logs[key]
-  rtmplog = RTMPLog.new(log_info)
-  if rtmplog.valid?
-    output_graph_data(key,rtmplog)
+  if log_info.valid?
+    @graph_count += 1
+    @graph_names[@graph_count] = key
+    log_info.analyze(key, @graph_count, @output_stream)
   end
 end
 tputs "DONE ANALYZING LOGS"
@@ -404,15 +579,7 @@ finish_html_output
 tputs "CLEANING UP"
 # Cleanup
 @all_logs.values.each do |logfile|
-  File.unlink(logfile) if logfile
+  logfile.cleanup
 end
+
 tputs "DONE"
-
-
-
-# // var annotatedtimeline = new google.visualization.AnnotatedTimeLine(document.getElementById('visualization'));
-# // annotatedtimeline.draw(data, {'displayAnnotations': true});
-# 
-# var g = new Dygraph.GVizChart(document.getElementById("visualization"));
-# g.draw(data, {displayAnnotations: true, labelsKMB: true, stackedGraph: true});
-
