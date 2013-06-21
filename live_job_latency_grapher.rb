@@ -1,4 +1,13 @@
 #/usr/bin/env ruby
+
+# File: live_job_latency_grapher.rb
+# Authors: Justin Greer, Scott Kidder
+# Purpose: Generates an HTML page containing interactive charts for the 
+#          processing latency values associated with a Live job outputs.
+# Usage: Supply a single Stream job-id value from the System Jobs page:
+#        https://app.zencoder.com/system/jobs
+# 
+
 require 'thread'
 require 'digest'
 
@@ -132,69 +141,10 @@ def start_html_output
   @output_stream.puts "  function drawVisualization() {"
 end
 
-# Output a data set for 
-def output_graph_data(title,graph_id,log_type,log,output)
-
-  # EVENT DATA
-  # Concatenate the event labels since Dygraph doesn't support multiple annotations at a single x-axis point
-  annotation_labels = Hash.new
-  log.events.each do |event|
-    current_timestamp = Time.at(event[0].to_f.round)
-    if annotation_labels.key?(current_timestamp) then
-      annotation_labels[current_timestamp] << ", #{event[1].to_s}"
-    else
-      annotation_labels[current_timestamp] = "#{event[1].to_s}"
-    end
-  end
-
-  event_timestamp_hash = Hash.new
-  output.puts "    #{log_type}_event_data_set[#{graph_id}] = ["
-  annotation_labels.keys.each do |event_timestamp|
-    # add entry to the timestamp map for lookup when processing the RTMP logs
-    event_timestamp_hash[event_timestamp] = "default"
-
-    output.puts "{"
-    output.puts "series: \"#{title}-#{log_type}\","
-    output.puts "x: \"%s\"," % event_timestamp.strftime("%F %TZ")
-    output.puts "shortText: \"%s\"," % annotation_labels[event_timestamp]
-    output.puts "text: \"%s\"," % annotation_labels[event_timestamp]
-    output.puts "},"
-  end
-  output.puts "    ];"
-  output.puts
-
-  # TIMING DATA
-  output.puts "    // debug: stream_start_delay=#{log.stream_start_delay}"
-  output.puts "    // debug: max_start_offset=#{log.max_start_offset}"
-  output.puts "    // debug: stream_start_time=#{log.stream_start_time}"
-  output.puts "    var data_#{log_type}_#{graph_id} = new google.visualization.DataTable();"
-  output.puts "    data_#{log_type}_#{graph_id}.addColumn('datetime', 'Time');"
-  output.puts "    data_#{log_type}_#{graph_id}.addColumn('number', '#{title}-#{log_type}');"
-  output.puts "    data_#{log_type}_#{graph_id}.addRows(["
-
-  assumed_stream_baseline = log.stream_start_time - [log.stream_start_delay, log.max_start_offset / 1000.0].max
-  log.timings.each do |timing|
-    latency = (timing[0] - assumed_stream_baseline)-(timing[2]/1000.0)
-    # puts "TIMING: #{timing[0]} - #{timing[1]} - #{timing[2]} (#{sprintf('%0.3f', latency)})"
-    # case timing[3]
-    # when nil
-      # output.puts "[new Date(%d), %0.3f, undefined]," % [(timing[0].to_f * 1000).round, latency]
-    # else
-    #   output.puts "[new Date(%d), %0.3f, \"%s\"]," % [(timing[0].to_f * 1000).round, latency, timing[3]]
-    # end
 
 
-     output.puts "[new Date(%d), %0.3f]," % [(timing[0].to_f * 1000).round, (latency < 0.0 ? 0 : latency)]
 
-     if event_timestamp_hash[Time.at(timing[0].to_f.round)] == "default" then
-       output.puts "[new Date(%d), %0.3f]," % [timing[0].to_f.round * 1000, (latency < 0.0 ? 0 : latency)]
-       event_timestamp_hash[Time.at(timing[0].to_f.round)] = "complete"
-     end
-  end
-  output.puts "    ]);"
-  output.puts "    #{log_type}_data_set[#{graph_id}] = data_#{log_type}_#{graph_id};"
-end
-
+# Close out the JavaScript block and add output-selection controls.
 def finish_html_output
 
   @output_stream.puts
@@ -242,10 +192,79 @@ def finish_html_output
 </html>'
 end
 
+module LogBase
+
+  # Output the data-set for a given log file.  All output will be sent to the 
+  # object referenced by the output' parameter.
+  #
+  def output_graph_data(title,graph_id,log_type,log,output)
+
+    # EVENT DATA
+    # Concatenate the event labels since Dygraph doesn't support multiple 
+    # annotations at a single x-axis point
+    annotation_labels = Hash.new
+    log.events.each do |event|
+
+      # round the timestamp to whole seconds since Dygraph does not support 
+      # annotations with millisecond-or-finer precision
+      current_timestamp = Time.at(event[0].to_f.round)
+      if annotation_labels.key?(current_timestamp) then
+        annotation_labels[current_timestamp] << ", #{event[1].to_s}"
+      else
+        annotation_labels[current_timestamp] = "#{event[1].to_s}"
+      end
+    end
+
+    # iterate over the events and send them to output
+    event_timestamp_hash = Hash.new
+    output.puts "    #{log_type}_event_data_set[#{graph_id}] = ["
+    annotation_labels.keys.each do |event_timestamp|
+      # add entry to the timestamp map for lookup when processing the RTMP logs
+      event_timestamp_hash[event_timestamp] = "default"
+
+      output.puts "{"
+      output.puts "series: \"#{title}-#{log_type}\","
+      output.puts "x: \"%s\"," % event_timestamp.strftime("%F %TZ")
+      output.puts "shortText: \"%s\"," % annotation_labels[event_timestamp]
+      output.puts "text: \"%s\"," % annotation_labels[event_timestamp]
+      output.puts "},"
+    end
+    output.puts "    ];"
+    output.puts
+
+    # TIMING DATA
+    output.puts "    // debug: stream_start_delay=#{log.stream_start_delay}
+                     // debug: max_start_offset=#{log.max_start_offset}
+                     // debug: stream_start_time=#{log.stream_start_time}
+                     var data_#{log_type}_#{graph_id} = new google.visualization.DataTable();
+                     data_#{log_type}_#{graph_id}.addColumn('datetime', 'Time');
+                     data_#{log_type}_#{graph_id}.addColumn('number', '#{title}-#{log_type}');
+                     data_#{log_type}_#{graph_id}.addRows(["
+
+    assumed_stream_baseline = log.stream_start_time - [log.stream_start_delay, log.max_start_offset / 1000.0].max
+    log.timings.each do |timing|
+      latency = (timing[0] - assumed_stream_baseline)-(timing[2]/1000.0)
+      output.puts "[new Date(%d), %0.3f]," % [(timing[0].to_f * 1000).round, (latency < 0.0 ? 0 : latency)]
+
+      if event_timestamp_hash[Time.at(timing[0].to_f.round)] == "default" then
+        output.puts "[new Date(%d), %0.3f]," % [timing[0].to_f.round * 1000, (latency < 0.0 ? 0 : latency)]
+        event_timestamp_hash[Time.at(timing[0].to_f.round)] = "complete"
+      end
+    end
+    output.puts "    ]);"
+
+    # add the output data set to an array indexed by the graph-id for look-up
+    # when an output is selected in the UI
+    output.puts "    #{log_type}_data_set[#{graph_id}] = data_#{log_type}_#{graph_id};"
+  end
+end
+
 
 # Collection of input stream logs on a Stream Ingest worker node
 #
 class IngestLogs
+  include LogBase
+
   attr_accessor :download_log, :parsed_download_log
 
   def initialize(download_log)
@@ -270,6 +289,8 @@ end
 # Collection of job logs for a single output on an Encoding Worker node
 #
 class WorkerLogs
+  include LogBase
+
   attr_accessor :upload_log, :encode_log, :parsed_upload_log, :parsed_encode_log
 
   def initialize(upload_log, encode_log)
@@ -277,7 +298,7 @@ class WorkerLogs
     @encode_log = encode_log
 
     @parsed_upload_log = RTMPLog.new(upload_log)
-    @parsed_encode_log = WorkerLatencyLog.new(encode_log)
+    @parsed_encode_log = WorkerEncodeLatencyLog.new(encode_log)
   end
 
   def valid?
@@ -299,10 +320,10 @@ class WorkerLogs
 end
 
 
-# Parser for the Worker Latency log file.  Provides accessors to events,
+# Parser for the Worker Encode Latency log file.  Provides accessors to events,
 # stream timing, and other metrics.
 # 
-class WorkerLatencyLog
+class WorkerEncodeLatencyLog
   attr_accessor :stream_start_time, :stream_start_delay, :max_start_offset, :timings, :max_stream_time, :max_latency, :events
   
   def initialize(filename)
@@ -442,7 +463,6 @@ class RTMPLog
 
     while line = logfile.gets
       @line_count += 1
-      # Ignore comments
       next if line =~ /^#/
       line_timestamp = parse_timestamp(line)
       @first_timestamp_seen ||= line_timestamp
@@ -450,7 +470,7 @@ class RTMPLog
 
       case line
         when /WARNING: Auth failed/
-          @events << [line_timestamp, time, stream_time]
+          @events << [line_timestamp, :auth_failed]
           @timings << [line_timestamp, stream_start_time, @last_stream_time, nil]
         when /DEBUG: Invoking FCPublish/
           @events << [line_timestamp, :fc_publish]
@@ -532,16 +552,20 @@ raise "Job #{@job_id} not found!" unless job
 
 tputs "GATHERING LOGS"
 
+input_log = IngestLogs.new(get_log(job.input_media_file, 'input', 'download/download.log'))
 @all_logs = {}
-@all_logs["Input #{job.input_media_file.id}"] = IngestLogs.new(get_log(job.input_media_file, 'input', 'download/download.log'))
+@all_logs["Input #{job.input_media_file.id}"] = input_log
 
-# add all output jobs to the queue
+# Use a queue to feed the threads that will parse the logs.  Tried 
+# constructing as many threads as there are outputs, but for jobs with a lot 
+# of outputs the number of ActiveRecord DB connections became a bottleneck 
+# and caused the script to fail.
 queue = Queue.new
 job.output_media_files.each do |o|
   queue << o
 end
 
-# create threads to process the output logs in parallel
+# create threads to process the output logs in parallel.  Consider adjusting the number of threads (currently 2).
 threads = []
 2.times do  | i |
   threads << Thread.new { 
