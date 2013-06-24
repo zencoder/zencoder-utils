@@ -4,8 +4,29 @@
 # Authors: Justin Greer, Scott Kidder
 # Purpose: Generates an HTML page containing interactive charts for the 
 #          processing latency values associated with a Live job outputs.
-# Usage: Supply a single Stream job-id value from the System Jobs page:
-#        https://app.zencoder.com/system/jobs
+# Usage: 
+# 1) Add the following Bash functions to your ~/.bashrc file:
+#  LIVE_SCRIPT_LOCATION=${HOME}/git/zencoder-utils/live_job_latency_grapher.rb
+#   function finished_live_job_graph {
+#     scp $LIVE_SCRIPT_LOCATION util2:
+#     ssh util2 "cd /data/zencoder/current_db4; script/runner -e production ~/live_job_latency_grapher.rb --user $USER $1"
+#     scp util2:/data/zencoder/current_db4/live_job_latency_graph.html /tmp/
+#     open /tmp/live_job_latency_graph.html
+#    }
+#   function running_live_job_graph {
+#     scp $LIVE_SCRIPT_LOCATION util2:
+#     ssh util2 "cd /data/zencoder/current_db4; script/runner -e production ~/live_job_latency_grapher.rb --live --user $USER $1"
+#     scp util2:/data/zencoder/current_db4/live_job_latency_graph.html /tmp/
+#     open /tmp/live_job_latency_graph.html
+#   }
+#
+# 2) Ensure that the .bashrc file has been sourced so that the functions are 
+#    available in your current Bash shell
+#
+# 3) Run the script for a Live job using the job ID:
+#      Completed job:     finished_live_job_graph <job ID>
+#      Running job:       running_live_job_graph <job ID>
+#
 # 
 
 require 'thread'
@@ -395,15 +416,17 @@ class WorkerEncodeLatencyLog
         cur_time = timing[0]
         stream_time = (timing[2] / 1000)
 
-        # only evaluate cases where the difference between timestamps is more than one second
+        # if it's the first pass
         if prev_cur_time.nil?
           prev_cur_time = cur_time
           prev_stream_time = stream_time
         else
+          # only evaluate cases where the difference between timestamps is more than one second
           cur_time_delta = cur_time - prev_cur_time
           if (cur_time_delta > 0.5)
             if cur_time_delta > (stream_time - prev_stream_time)
               # found the baseline, where we're transcoding slower than realtime
+              # e.g. wall clock time that's passed is greater than the stream time that's passed
               @stream_start_time = cur_time - stream_time
               break
             end
