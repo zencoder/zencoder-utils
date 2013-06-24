@@ -203,7 +203,7 @@ def finish_html_output
             merged_data = google.visualization.data.join(merged_data, encode_data_set[i], 'full', [[0,0]], [1,2], [1]);
           }
 
-          g.updateOptions({ 'file': merged_data, connectSeparatedPoints: true, legend: 'always', axisLabelFontSize: 12, displayAnnotations: true, showRangeSelector: true, valueRange: [0,null] } );
+          g.updateOptions({ 'file': merged_data, connectSeparatedPoints: true, legend: 'always', axisLabelFontSize: 12, displayAnnotations: true, showRangeSelector: true, valueRange: [0,null], xlabel: \"Timestamp\", ylabel: \"Latency (s)\" } );
           var merged_annotations = rtmp_event_data_set[1].concat(rtmp_event_data_set[i]).concat(encode_event_data_set[i]);
           g.setAnnotations(merged_annotations);
         }
@@ -382,6 +382,9 @@ class WorkerEncodeLatencyLog
     @stream_start_time = nil
     @last_stream_time = 0
 
+    prev_cur_time = nil
+    prev_stream_time = nil
+
 
     while line = logfile.gets
       @line_count += 1
@@ -398,44 +401,69 @@ class WorkerEncodeLatencyLog
           if log_stats['encode'] != nil then
 
             cur_time = log_stats['encode']['cur_time'].to_f
-            if @stream_start_time.nil? then
-              @stream_start_time = log_stats['encode']['start_time'].to_f
-              @events << [cur_time, :started_encoding]
-            end
-            @last_stream_time = log_stats['encode']['stream_time'].to_f * 1000
+            # if @stream_start_time.nil? then
+              # @stream_start_time = log_stats['encode']['start_time'].to_f
+            #   @events << [cur_time, :started_encoding]
+            # end
+            stream_time = log_stats['encode']['stream_time'].to_f
+            @last_stream_time = stream_time * 1000
             @timings << [cur_time, @stream_start_time, @last_stream_time, nil]
+
+
+            # 
+            # Look for the latency baseline crossover point
+
+            # if it's the first pass
+            if prev_cur_time.nil?
+              prev_cur_time = cur_time
+              prev_stream_time = stream_time
+              @events << [cur_time, :started_encoding]
+            elsif @stream_start_time.nil?
+              # only evaluate cases where the difference between timestamps is more than one second
+              cur_time_delta = cur_time - prev_cur_time
+              if (cur_time_delta > 0.5)
+                if cur_time_delta > (stream_time - prev_stream_time)
+                  # found the baseline, where we're transcoding slower than realtime
+                  # e.g. wall clock time that's passed is greater than the stream time that's passed
+                  @stream_start_time = cur_time - stream_time
+                end
+
+                prev_stream_time = stream_time
+                prev_cur_time = cur_time
+              end
+            end
           end
         end
       end
       logfile.close
 
       # look for the baseline in the collected timing info
-      prev_cur_time = nil
-      prev_stream_time = nil
-      @timings.each do |timing|
-        cur_time = timing[0]
-        stream_time = (timing[2] / 1000)
+      # prev_cur_time = nil
+      # prev_stream_time = nil
+      # @timings.each do |timing|
+      #   cur_time = timing[0]
+      #   stream_time = (timing[2] / 1000)
 
-        # if it's the first pass
-        if prev_cur_time.nil?
-          prev_cur_time = cur_time
-          prev_stream_time = stream_time
-        else
-          # only evaluate cases where the difference between timestamps is more than one second
-          cur_time_delta = cur_time - prev_cur_time
-          if (cur_time_delta > 0.5)
-            if cur_time_delta > (stream_time - prev_stream_time)
-              # found the baseline, where we're transcoding slower than realtime
-              # e.g. wall clock time that's passed is greater than the stream time that's passed
-              @stream_start_time = cur_time - stream_time
-              break
-            end
+      #   # if it's the first pass
+      #   if prev_cur_time.nil?
+      #     prev_cur_time = cur_time
+      #     prev_stream_time = stream_time
+      #   else
+      #     # only evaluate cases where the difference between timestamps is more than one second
+      #     cur_time_delta = cur_time - prev_cur_time
+      #     if (cur_time_delta > 0.5)
+      #       if cur_time_delta > (stream_time - prev_stream_time)
+      #         # found the baseline, where we're transcoding slower than realtime
+      #         # e.g. wall clock time that's passed is greater than the stream time that's passed
+      #         @stream_start_time = cur_time - stream_time
+      #         break
+      #       end
 
-            prev_stream_time = stream_time
-            prev_cur_time = cur_time
-          end
-        end
-      end
+      #       prev_stream_time = stream_time
+      #       prev_cur_time = cur_time
+      #     end
+      #   end
+      # end
     end
   end
 
