@@ -401,14 +401,9 @@ class WorkerEncodeLatencyLog
           if log_stats['encode'] != nil then
 
             cur_time = log_stats['encode']['cur_time'].to_f
-            # if @stream_start_time.nil? then
-              # @stream_start_time = log_stats['encode']['start_time'].to_f
-            #   @events << [cur_time, :started_encoding]
-            # end
             stream_time = log_stats['encode']['stream_time'].to_f
             @last_stream_time = stream_time * 1000
             @timings << [cur_time, @stream_start_time, @last_stream_time, nil]
-
 
             # 
             # Look for the latency baseline crossover point
@@ -437,33 +432,6 @@ class WorkerEncodeLatencyLog
       end
       logfile.close
 
-      # look for the baseline in the collected timing info
-      # prev_cur_time = nil
-      # prev_stream_time = nil
-      # @timings.each do |timing|
-      #   cur_time = timing[0]
-      #   stream_time = (timing[2] / 1000)
-
-      #   # if it's the first pass
-      #   if prev_cur_time.nil?
-      #     prev_cur_time = cur_time
-      #     prev_stream_time = stream_time
-      #   else
-      #     # only evaluate cases where the difference between timestamps is more than one second
-      #     cur_time_delta = cur_time - prev_cur_time
-      #     if (cur_time_delta > 0.5)
-      #       if cur_time_delta > (stream_time - prev_stream_time)
-      #         # found the baseline, where we're transcoding slower than realtime
-      #         # e.g. wall clock time that's passed is greater than the stream time that's passed
-      #         @stream_start_time = cur_time - stream_time
-      #         break
-      #       end
-
-      #       prev_stream_time = stream_time
-      #       prev_cur_time = cur_time
-      #     end
-      #   end
-      # end
     end
   end
 
