@@ -205,9 +205,10 @@ end
 
 # Only do color on tty outputs.  So piping to mate works, etc.
 $DISABLE_COLOR = !STDOUT.tty?
+$DEFAULT_COLOR = :none
 
 # Colored print...
-def cprint(message, color = :none)
+def cprint(message, color = $DEFAULT_COLOR)
   colors = {
     :black => '0;30',
     :dark_gray => '1;30',
@@ -238,8 +239,16 @@ def cprint(message, color = :none)
   end
 end
 
-def cputs(message, color)
+def cputs(message, color = $DEFAULT_COLOR)
   cprint(message+"\n", color)
+end
+
+def with_color(color, &block)
+  prev_color = $DEFAULT_COLOR
+  $DEFAULT_COLOR = color
+  block.call
+ensure
+  $DEFAULT_COLOR = prev_color
 end
 
 # Just to show the colors, for reference.
