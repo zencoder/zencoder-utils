@@ -45,13 +45,16 @@ module IoHelpers
   def byte; read(1).unpack('C').first; end
   def word; read(2).unpack('v').first; end
   def dword; read(4).unpack('V').first; end
-  def qword; read(8).unpack('Q').first; end
+  def qword; dword + (dword << 32); end
 
   # Little-Endian Signed Readers (Assuming Intel 64-bit architecture)
   def char; read(1).unpack('c').first; end
   def short; read(2).unpack('s').first; end
   def int; read(4).unpack('l').first; end
   def long; read(8).unpack('q').first; end
+
+  # In Windows, a long is a 32-bit signed little-endian
+  alias_method :winlong, :int
 
   # Little-Endian Float Readers
   def single; read(4).unpack('e').first; end
@@ -80,7 +83,9 @@ module IoHelpers
     v + b
   end
 
+  # Windows/ASF guid
   def guid; parts = read(16).unpack('VvvnNn'); sprintf('%08x-%04x-%04x-%04x-%08x%04x', *parts).upcase; end
+
   def fourcc; read(4).unpack('a*').first; end
 
   def read_wchars(count)
