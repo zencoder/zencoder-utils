@@ -121,10 +121,11 @@ end
 
 
 class Bitstream
-  attr_accessor :bit_offset, :data
+  attr_accessor :bit_offset, :data, :total_bits
 
   def initialize(data_string, starting_byte_offset = 0)
     @data = data_string.kind_of?(String) ? data_string.bytes.to_a : data_string
+    @total_bits = @data.length * 8
     @bit_offset = 0
     @pos = starting_byte_offset
   end
@@ -146,10 +147,6 @@ class Bitstream
     value += getbits_internal(count)
   end
 
-  def skipbits(count)
-    @bit_offset += count
-  end
-
   # Do getbits, with up to 16 bits.
   def getbits_internal(count, increment_position = true)
     return 0 if count > 16 || count < 1
@@ -163,8 +160,13 @@ class Bitstream
     return val
   end
 
+  def skipbits(count)
+    @bit_offset += count
+  end
+
   def append(data_string)
     @data += data_string.bytes.to_a
+    @total_bits += data_string.length
   end
 
   # Remove any data that we've moved past already, so we don't build up too much in memory.
@@ -180,6 +182,8 @@ class Bitstream
       @pos = 0
     end
 
+    @total_bits = @data.length * 8
+
     true
   end
 
@@ -188,22 +192,25 @@ class Bitstream
       puts "Warning: Reading at non-aligned bitstream offset"
     end
     byte = @bit_offset / 8
-    @bit_offset = [@bit_offset + size * 8, @data.length * 8].min
+    @bit_offset = [@bit_offset + size * 8, @total_bits].min
     @data[byte,size].pack('C*')
   end
 
   def remaining_bits
-    @data.length * 8 - @bit_offset
+    @total_bits - @bit_offset
   end
 
   # Special data types
 
+  # H.264 Variable-length unsigned integer
   def ue_v
     power = 0
     power += 1 while (getbits(1) == 0 && (remaining_bits > 0))
     additional = getbits(power)
     2**power - 1 + additional
   end
+
+  # H.264 Variable-length signed integer
   def se_v
     k = ue_v
     (-1) ** (k+1) * (k / 2.0).ceil
