@@ -117,6 +117,13 @@ end
 require 'stringio'
 class StringIO
   include IoHelpers
+
+  def append(string)
+    orig_pos = pos
+    seek(0, IO::SEEK_END)
+    write(string)
+    seek(orig_pos)
+  end
 end
 
 

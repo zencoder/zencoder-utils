@@ -32,9 +32,11 @@ module IoHelpers
 
   def peek(size)
     @peek_buffer ||= ""
-    bytes = read(size)
-    @peek_buffer << bytes
-    bytes
+    if @peek_buffer.length < size
+      new_bytes = read(size - @peek_buffer.length)
+      @peek_buffer << new_bytes if new_bytes
+    end
+    @peek_buffer[0,size]
   end
   
   # Set up a read method that uses the peek buffer.
