@@ -4,8 +4,29 @@
 # Authors: Justin Greer, Scott Kidder
 # Purpose: Generates an HTML page containing interactive charts for the 
 #          processing latency values associated with a Live job outputs.
-# Usage: Supply a single Stream job-id value from the System Jobs page:
-#        https://app.zencoder.com/system/jobs
+# Usage: 
+# 1) Add the following Bash functions to your ~/.bashrc file:
+#  LIVE_SCRIPT_LOCATION=${HOME}/git/zencoder-utils/live_job_latency_grapher.rb
+#   function finished_live_job_graph {
+#     scp $LIVE_SCRIPT_LOCATION util2:
+#     ssh util2 "cd /data/zencoder/current_db4; script/runner -e production ~/live_job_latency_grapher.rb --user $USER $1"
+#     scp util2:/data/zencoder/current_db4/live_job_latency_graph.html /tmp/
+#     open /tmp/live_job_latency_graph.html
+#    }
+#   function running_live_job_graph {
+#     scp $LIVE_SCRIPT_LOCATION util2:
+#     ssh util2 "cd /data/zencoder/current_db4; script/runner -e production ~/live_job_latency_grapher.rb --live --user $USER $1"
+#     scp util2:/data/zencoder/current_db4/live_job_latency_graph.html /tmp/
+#     open /tmp/live_job_latency_graph.html
+#   }
+#
+# 2) Ensure that the .bashrc file has been sourced so that the functions are 
+#    available in your current Bash shell
+#
+# 3) Run the script for a Live job using the job ID:
+#      Completed job:     finished_live_job_graph <job ID>
+#      Running job:       running_live_job_graph <job ID>
+#
 # 
 
 require 'thread'
@@ -182,7 +203,7 @@ def finish_html_output
             merged_data = google.visualization.data.join(merged_data, encode_data_set[i], 'full', [[0,0]], [1,2], [1]);
           }
 
-          g.updateOptions({ 'file': merged_data, connectSeparatedPoints: true, legend: 'always', axisLabelFontSize: 12, displayAnnotations: true, showRangeSelector: true, valueRange: [0,null] } );
+          g.updateOptions({ 'file': merged_data, connectSeparatedPoints: true, legend: 'always', axisLabelFontSize: 12, displayAnnotations: true, showRangeSelector: true, valueRange: [0,null], xlabel: \"Timestamp\", ylabel: \"Latency (s)\" } );
           var merged_annotations = rtmp_event_data_set[1].concat(rtmp_event_data_set[i]).concat(encode_event_data_set[i]);
           g.setAnnotations(merged_annotations);
         }
@@ -361,6 +382,9 @@ class WorkerEncodeLatencyLog
     @stream_start_time = nil
     @last_stream_time = 0
 
+    prev_cur_time = nil
+    prev_stream_time = nil
+
 
     while line = logfile.gets
       @line_count += 1
@@ -377,42 +401,37 @@ class WorkerEncodeLatencyLog
           if log_stats['encode'] != nil then
 
             cur_time = log_stats['encode']['cur_time'].to_f
-            if @stream_start_time.nil? then
-              @stream_start_time = log_stats['encode']['start_time'].to_f
-              @events << [cur_time, :started_encoding]
-            end
-            @last_stream_time = log_stats['encode']['stream_time'].to_f * 1000
+            stream_time = log_stats['encode']['stream_time'].to_f
+            @last_stream_time = stream_time * 1000
             @timings << [cur_time, @stream_start_time, @last_stream_time, nil]
+
+            # 
+            # Look for the latency baseline crossover point
+
+            # if it's the first pass
+            if prev_cur_time.nil?
+              prev_cur_time = cur_time
+              prev_stream_time = stream_time
+              @events << [cur_time, :started_encoding]
+            elsif @stream_start_time.nil?
+              # only evaluate cases where the difference between timestamps is more than one second
+              cur_time_delta = cur_time - prev_cur_time
+              if (cur_time_delta > 0.5)
+                if cur_time_delta > (stream_time - prev_stream_time)
+                  # found the baseline, where we're transcoding slower than realtime
+                  # e.g. wall clock time that's passed is greater than the stream time that's passed
+                  @stream_start_time = cur_time - stream_time
+                end
+
+                prev_stream_time = stream_time
+                prev_cur_time = cur_time
+              end
+            end
           end
         end
       end
       logfile.close
 
-      # look for the baseline in the collected timing info
-      prev_cur_time = nil
-      prev_stream_time = nil
-      @timings.each do |timing|
-        cur_time = timing[0]
-        stream_time = (timing[2] / 1000)
-
-        # only evaluate cases where the difference between timestamps is more than one second
-        if prev_cur_time.nil?
-          prev_cur_time = cur_time
-          prev_stream_time = stream_time
-        else
-          cur_time_delta = cur_time - prev_cur_time
-          if (cur_time_delta > 0.5)
-            if cur_time_delta > (stream_time - prev_stream_time)
-              # found the baseline, where we're transcoding slower than realtime
-              @stream_start_time = cur_time - stream_time
-              break
-            end
-
-            prev_stream_time = stream_time
-            prev_cur_time = cur_time
-          end
-        end
-      end
     end
   end
 
