@@ -7,8 +7,6 @@
 $:.unshift(File.dirname(__FILE__))
 require 'dump_helpers'
 
-def error(msg); puts msg; exit; end
-
 def decode_script_data(data, prefix = '', cur_pos = 0)
   data_type = data[cur_pos,1].unpack('C').first
   cur_pos += 1
