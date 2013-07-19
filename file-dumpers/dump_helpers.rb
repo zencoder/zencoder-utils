@@ -42,19 +42,31 @@ module IoHelpers
   def f64; read(8).unpack('G').first; end
 
   # Little-Endian Unsigned Readers (Assuming Intel 64-bit architecture)
-  def byte; read(1).unpack('C').first; end
-  def word; read(2).unpack('v').first; end
-  def dword; read(4).unpack('V').first; end
-  def qword; dword + (dword << 32); end
+  def ui8L; read(1).unpack('C').first; end
+  def ui16L; read(2).unpack('v').first; end
+  def ui24L; (read(3) + "\000").unpack('V').first; end
+  def ui32L; read(4).unpack('V').first; end
+  def ui64L; dword + (dword << 32); end
+
+  alias_method :byte, :ui8L
+  alias_method :word, :ui16L
+  alias_method :dword, :ui32L
+  alias_method :qword, :ui64L
 
   # Little-Endian Signed Readers (Assuming Intel 64-bit architecture)
-  def char; read(1).unpack('c').first; end
-  def short; read(2).unpack('s').first; end
-  def int; read(4).unpack('l').first; end
-  def long; read(8).unpack('q').first; end
+  def si8L; read(1).unpack('c').first; end
+  def si16L; read(2).unpack('s').first; end
+  def si24L; (read(3) + "\000").unpack('l').first; end
+  def si32L; read(4).unpack('l').first; end
+  def si64L; read(8).unpack('q').first; end
+
+  alias_method :char, :si8L
+  alias_method :short, :si16L
+  alias_method :int, :si32L
+  alias_method :long, :si64L
 
   # In Windows, a long is a 32-bit signed little-endian
-  alias_method :winlong, :int
+  alias_method :winlong, :si32L
 
   # Little-Endian Float Readers
   def single; read(4).unpack('e').first; end
