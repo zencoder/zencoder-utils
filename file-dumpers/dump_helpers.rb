@@ -24,42 +24,70 @@ end
 module IoHelpers
 
   # Big-Endian Unsigned Readers
-  def ui8; read(1).unpack('C').first; end
-  def ui16; read(2).unpack('n').first; end
-  def ui24; ("\000" + read(3)).unpack('N').first; end
-  def ui32; read(4).unpack('N').first; end
-  def ui64; read(8).unpack('NN').inject(0) { |s,v| (s << 32) + v }; end
+  if RUBY_VERSION >= '2.0.0'
+    def ui8; read(1).unpack('C').first; end
+    def ui16; read(2).unpack('S>').first; end
+    def ui24; ("\000" + read(3)).unpack('L>').first; end
+    def ui32; read(4).unpack('L>').first; end
+    def ui64; read(8).unpack('Q>').first; end
+  else
+    def ui8; read(1).unpack('C').first; end
+    def ui16; read(2).unpack('n').first; end
+    def ui24; ("\000" + read(3)).unpack('N').first; end
+    def ui32; read(4).unpack('N').first; end
+    def ui64; read(8).unpack('NN').inject(0) { |s,v| (s << 32) + v }; end
+  end
 
   # Big-Endian Signed Readers
-  def si8; read(1).unpack('c').first; end
-  def si16; read(2).unpack('cC').inject(0) { |s,v| (s << 8) + v }; end
-  def si24; read(3).unpack('cCC').inject(0) { |s,v| (s << 8) + v }; end
-  def si32; read(4).unpack('cCCC').inject(0) { |s,v| (s << 8) + v }; end
-  def si64; read(8).unpack('cCCCCCCC').inject(0) { |s,v| (s << 8) + v }; end
+  if RUBY_VERSION >= '2.0.0'
+    def si8; read(1).unpack('c').first; end
+    def si16; read(2).unpack('s>').first; end
+    def si24; ("\000" + read(3)).unpack('l>').first; end
+    def si32; read(4).unpack('l>').first; end
+    def si64; read(8).unpack('q>').first; end
+  else
+    def si8; read(1).unpack('c').first; end
+    def si16; read(2).unpack('cC').inject(0) { |s,v| (s << 8) + v }; end
+    def si24; read(3).unpack('cCC').inject(0) { |s,v| (s << 8) + v }; end
+    def si32; read(4).unpack('cCCC').inject(0) { |s,v| (s << 8) + v }; end
+    def si64; read(8).unpack('cCCCCCCC').inject(0) { |s,v| (s << 8) + v }; end
+  end
 
-  # Big-Endian Float Readers
-  def f32; read(4).unpack('g').first; end
-  def f64; read(8).unpack('G').first; end
-
-  # Little-Endian Unsigned Readers (Assuming Intel 64-bit architecture)
-  def ui8L; read(1).unpack('C').first; end
-  def ui16L; read(2).unpack('v').first; end
-  def ui24L; (read(3) + "\000").unpack('V').first; end
-  def ui32L; read(4).unpack('V').first; end
-  def ui64L; dword + (dword << 32); end
-
+  # Little-Endian Unsigned Readers
+  if RUBY_VERSION >= '2.0.0'
+    def ui8L; read(1).unpack('C').first; end
+    def ui16L; read(2).unpack('S<').first; end
+    def ui24L; (read(3) + "\000").unpack('L<').first; end
+    def ui32L; read(4).unpack('L<').first; end
+    def ui64L; read(8).unpack('Q<').first; end
+  else
+    # (Assuming Intel 64-bit architecture)
+    def ui8L; read(1).unpack('C').first; end
+    def ui16L; read(2).unpack('v').first; end
+    def ui24L; (read(3) + "\000").unpack('V').first; end
+    def ui32L; read(4).unpack('V').first; end
+    def ui64L; ui32L + (ui32L << 32); end
+  end
   alias_method :byte, :ui8L
   alias_method :word, :ui16L
   alias_method :dword, :ui32L
   alias_method :qword, :ui64L
 
-  # Little-Endian Signed Readers (Assuming Intel 64-bit architecture)
-  def si8L; read(1).unpack('c').first; end
-  def si16L; read(2).unpack('s').first; end
-  def si24L; (read(3) + "\000").unpack('l').first; end
-  def si32L; read(4).unpack('l').first; end
-  def si64L; read(8).unpack('q').first; end
-
+  # Little-Endian Signed Readers
+  if RUBY_VERSION >= '2.0.0'
+    def si8L; read(1).unpack('c').first; end
+    def si16L; read(2).unpack('s<').first; end
+    def si24L; (read(3) + "\000").unpack('l<').first; end
+    def si32L; read(4).unpack('l<').first; end
+    def si64L; read(8).unpack('q<').first; end
+  else
+    # (Assuming Intel 64-bit architecture)
+    def si8L; read(1).unpack('c').first; end
+    def si16L; read(2).unpack('s').first; end
+    def si24L; (read(3) + "\000").unpack('l').first; end
+    def si32L; read(4).unpack('l').first; end
+    def si64L; read(8).unpack('q').first; end
+  end
   alias_method :char, :si8L
   alias_method :short, :si16L
   alias_method :int, :si32L
@@ -67,6 +95,10 @@ module IoHelpers
 
   # In Windows, a long is a 32-bit signed little-endian
   alias_method :winlong, :si32L
+
+  # Big-Endian Float Readers
+  def f32; read(4).unpack('g').first; end
+  def f64; read(8).unpack('G').first; end
 
   # Little-Endian Float Readers
   def single; read(4).unpack('e').first; end
