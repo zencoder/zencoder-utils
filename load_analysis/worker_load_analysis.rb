@@ -90,6 +90,10 @@ if ACCOUNT_ID != :all
   raise "Not yet optimized."
   @inputs = @cloud.input_media_files.find(:all, :select => 'id,account_id,job_id,state,created_at,started_at,finished_at,times,low_priority', :conditions => ["(finished_at is null or finished_at >= ?) and created_at < ? and state != 'cancelled' and account_id = ?", @start_time, @end_time, ACCOUNT_ID])
   @outputs = @cloud.output_media_files.find(:all, :select => 'id,account_id,job_id,state,created_at,started_at,updated_at,finished_at,times,low_priority,cached_queue_time,cached_total_time,estimated_transcode_load', :conditions => ["(finished_at is null or finished_at >= ?) and created_at < ? and state != 'cancelled' and account_id = ?", @start_time, @end_time, ACCOUNT_ID])
+elsif 0
+  # Use this for disabling input/output collection.  Just for fast counts of worker info.
+  @inputs = []
+  @outputs = []
 else
   before = Time.now
   running_inputs =  @cloud.input_media_files.find(:all, :select => 'id,account_id,job_id,state,created_at,started_at,finished_at,times,low_priority,test', :conditions => ["finished_at is null and created_at < ? and state != 'cancelled'", @end_time])
