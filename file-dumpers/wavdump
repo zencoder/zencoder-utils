@@ -10,7 +10,8 @@ class WaveFile
   
   attr_reader :headers
   
-  def initialize(filename)
+  def initialize(filename, verbose_output = false)
+    @verbose = verbose_output
     @headers = {}
     @file = File.open(filename)
     @data_lenth = 0
@@ -20,25 +21,35 @@ class WaveFile
       @headers[HEADER_NAMES[header_num]] = value
     end
 
+    if @verbose
+      puts "HEADERS:\n"
+      @headers.each_pair { |key,val| puts "  #{key} = #{val}" }
+      puts
+    end
+
     # Read any extra trailing data if needed...
     if @headers[:fmt_size].to_i > 16
       # We'll just throw it away since we don't know what it is.
-      @file.read(@headers[:fmt_size].to_i - 16)
+      extra_header = @file.read(@headers[:fmt_size].to_i - 16)
+      puts "Extra header found: #{extra_header.inspect}" if @verbose
     end
 
     # Read the rest of the chunks.
     while !@file.eof?
       chunk_id,chunk_size = @file.read(8).unpack('a4V')
+      puts "Chunk '#{chunk_id}' found with size #{chunk_size}" if @verbose
       if chunk_id == 'data'
         @data_position = @file.pos
         @data_length = chunk_size
       end
       @file.seek(chunk_size, IO::SEEK_CUR)
     end
-    
+
     raise "No data chunk!" unless @data_position
-    
+
     @headers[:sample_count] = @data_length / @headers[:block_align]
+
+    puts if @verbose
   end
   
   def data_file(sample_start)
@@ -55,8 +66,14 @@ class WaveFile
   end
 end
 
+@verbose = false
 
-inwav = WaveFile.new(ARGV.first)
+if ARGV.first == '-v'
+  @verbose = true
+  ARGV.shift
+end
+
+inwav = WaveFile.new(ARGV.first, @verbose)
 puts "File info:"
 puts "  Channels:    #{inwav.headers[:channels]}"
 puts "  Sample Rate: #{inwav.headers[:sample_rate]}"
