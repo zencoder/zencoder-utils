@@ -20,10 +20,18 @@
 #     open /tmp/live_job_latency_graph.html
 #   }
 #
-# 2) Ensure that the .bashrc file has been sourced so that the functions are 
+# 2) Verify that your .ssh/config file contains an entry for the util* servers specifying that the deploy user account is used.  Here's an example:
+#    $ cat ~/.ssh/config
+#    Host app* db* static* util* tool* qa staging chef utility public *.zencoder.com
+#      User deploy
+#      IdentityFile ~/.ssh/id_rsa
+#      ForwardAgent yes
+#
+#
+# 3) Ensure that the .bashrc file has been sourced so that the functions are 
 #    available in your current Bash shell
 #
-# 3) Run the script for a Live job using the job ID:
+# 4) Run the script for a Live job using the job ID:
 #      Completed job:     finished_live_job_graph <job ID>
 #      Running job:       running_live_job_graph <job ID>
 #
@@ -395,7 +403,7 @@ class WorkerEncodeLatencyLog
       case line
         when /^(.+) INFO -- (.+)$/
 
-          # parse the JSON data from the log line
+          # parse the Ruby structure from the log line
           log_stats = eval($2)
 
           if log_stats['encode'] != nil then
