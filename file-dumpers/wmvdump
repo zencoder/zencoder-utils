@@ -4,6 +4,9 @@
 # WMV Dump
 #
 
+$:.unshift(File.dirname(__FILE__))
+require 'dump_helpers'
+
 GUIDS = {
   :asf_advanced_content_encryption_object                            => '43058533-6981-49E6-9B74-AD12CB86D58C',
   :asf_advanced_mutual_exclusion_object                              => 'A08649CF-4775-4670-8A16-6E35357566CD',
@@ -71,47 +74,6 @@ GUIDS = {
   :asf_web_stream_format                                             => 'DA1E6B13-8359-4050-B398-388E965BF00C',
   :asf_web_stream_media_subtype                                      => '776257D4-C627-41CB-8F81-7AC7FF1C40CC'
 }
-
-def error(msg); puts msg; exit; end
-
-require 'stringio'
-module IoHelpers
-  def ui8; read(1).unpack('C').first; end
-  def ui16; read(2).unpack('n').first; end
-  def ui32; read(4).unpack('N').first; end
-  def ui24; ("\000" + read(3)).unpack('N').first; end
-
-  def byte; read(1).unpack('C').first; end
-  def word; read(2).unpack('v').first; end
-  def dword; read(4).unpack('V').first; end
-  def qword; dword + (dword << 32); end
-
-  # Not positive this is right, but the long is 32-bits.
-  def long; read(4).unpack('V').first; end
-
-  def guid; parts = read(16).unpack('VvvnNn'); sprintf('%08x-%04x-%04x-%04x-%08x%04x', *parts).upcase; end
-  
-  def read_wchars(count)
-    buffer = []
-    count.times do
-      buffer << byte
-      trash = byte
-    end
-    buffer.pop if buffer.last == 0
-    buffer.pack('C*')
-  end
-end
-class IO
-  include IoHelpers
-end
-class StringIO
-  include IoHelpers
-end
-class String
-  def hex
-    unpack('H*').first.scan(/../).join(' ')
-  end
-end
 
 def look_up_object_type(guid)
   GUIDS.each_pair { |k,v| return k if v == guid }
@@ -201,14 +163,14 @@ def decode_stream_properties_object(size)
     reserved = tsd.byte
     format_data_size = tsd.word
     format_data_size_2 = tsd.dword
-    image_width = tsd.long
-    image_height = tsd.long
+    image_width = tsd.winlong
+    image_height = tsd.winlong
     reserved2 = tsd.word
     bits_per_pixel = tsd.word
     compression_type = tsd.read(4)
     image_size = tsd.dword
-    ppm_h = tsd.long
-    ppm_v = tsd.long
+    ppm_h = tsd.winlong
+    ppm_v = tsd.winlong
     color_count = tsd.dword
     important_color_count = tsd.dword
     puts "  Codec Specific Data:"

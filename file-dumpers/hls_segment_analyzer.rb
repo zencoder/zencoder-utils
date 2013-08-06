@@ -19,57 +19,10 @@
 #   http://flavor.sourceforge.net/samples/mpeg2ps.htm
 #   http://knol.google.com/k/mpeg-2-transmission
 
-require 'stringio'
+$:.unshift(File.dirname(__FILE__))
+require 'dump_helpers'
 
-def error(msg); puts msg; exit; end
-
-$DISABLE_COLOR = !STDOUT.tty?
-
-# Colored print...
-def cprint(message, color = $DEFAULT_COLOR)
-  colors = {
-    :black => '0;30',
-    :dark_gray => '1;30',
-    :dark_grey => '1;30',
-    :gray => '0',
-    :grey => '0',
-    :dark_red => '0;31',
-    :red => '1;31',
-    :dark_green => '0;32',
-    :green => '1;32',
-    :dark_yellow => '0;33',
-    :yellow => '1;33',
-    :dark_blue => '0;34',
-    :blue => '1;34',
-    :dark_purple => '0;35',
-    :dark_magenta => '0;35',
-    :purple => '1;35',
-    :magenta => '1;35',
-    :dark_cyan => '0;36',
-    :cyan => '1;36',
-    :dark_white => '0;37',
-    :white => '1;37'
-  }
-  if colors[color] && !$DISABLE_COLOR
-    print "\x1b[1;#{colors[color]}m#{message}\x1b[0m"
-  else
-    print message
-  end
-end
-
-def cputs(message, color = $DEFAULT_COLOR)
-  cprint(message+"\n", color)
-end
-
-def with_color(color, &block)
-  prev_color = $DEFAULT_COLOR
-  $DEFAULT_COLOR = color
-  block.call
-ensure
-  $DEFAULT_COLOR = prev_color
-end
-
-
+# Override a bunch of stuff to use a peek buffer.
 module IoHelpers
   def ui8; read2(1).unpack('C').first; end
   def ui16; read2(2).unpack('n').first; end
@@ -132,96 +85,6 @@ module IoHelpers
   end
 end
 
-class IO
-  include IoHelpers
-end
-class StringIO
-  include IoHelpers
-
-  def append(string)
-    orig_pos = pos
-    seek(0, IO::SEEK_END)
-    write(string)
-    seek(orig_pos)
-  end
-end
-
-class Bitstream
-  attr_accessor :bit_offset, :data
-  
-  def initialize(data_string, starting_byte_offset = 0)
-    @data = data_string
-    @bit_offset = 0
-    @pos = starting_byte_offset
-  end
-
-  def nextbits(count)
-    raise "nextbits of more than 16 not implemented" if count > 16
-    getbits_internal(count, false)
-  end
-
-  # Return an integer of the next _count_ bits and increment @bit_offset so that
-  # subsequent calls will get following bits.
-  def getbits(count)
-    value = 0
-    while count > 16
-      value += getbits_internal(16)
-      count -= 16
-      value = value << [count,16].min
-    end
-    value += getbits_internal(count)
-  end
-  
-  def skipbits(count)
-    @bit_offset += count
-  end
-  
-  # Do getbits, with up to 16 bits.
-  def getbits_internal(count, increment_position = true)
-    return 0 if count > 16 || count < 1
-    byte = @bit_offset / 8
-    bit  = @bit_offset % 8
-    val = (@data[@pos + byte].to_i << 16) + (@data[@pos + byte + 1].to_i << 8) + @data[@pos + byte + 2].to_i
-    val = (val << bit) & 16777215
-    val = val >> (24 - count)
-
-    @bit_offset += count if increment_position
-    return val
-  end
-  
-  def append(data_string)
-    @data << data_string
-  end
-  
-  # Remove any data that we've moved past already, so we don't build up too much in memory.
-  def pop
-    byte = @bit_offset / 8
-    bit = @bit_offset % 8
-    
-    @pos += byte
-    @bit_offset = bit
-    
-    if @pos > 0
-      @data = @data[@pos..-1]
-      @pos = 0
-    end
-    
-    true
-  end
-
-  def read(size)
-    if @bit_offset % 8 > 0
-      puts "Warning: Reading at non-aligned bitstream offset"
-    end
-    byte = @bit_offset / 8
-    @bit_offset = [@bit_offset + size * 8, @data.length * 8].min
-    @data[byte,size]
-  end
-
-  def remaining_bits
-    @data.length * 8 - @bit_offset
-  end
-end
 
 STREAM_TYPES = {
   0x00 => "Picture",

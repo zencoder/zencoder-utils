@@ -24,34 +24,81 @@ end
 module IoHelpers
 
   # Big-Endian Unsigned Readers
-  def ui8; read(1).unpack('C').first; end
-  def ui16; read(2).unpack('n').first; end
-  def ui24; ("\000" + read(3)).unpack('N').first; end
-  def ui32; read(4).unpack('N').first; end
-  def ui64; read(8).unpack('NN').inject(0) { |s,v| (s << 32) + v }; end
+  if RUBY_VERSION >= '2.0.0'
+    def ui8; read(1).unpack('C').first; end
+    def ui16; read(2).unpack('S>').first; end
+    def ui24; ("\000" + read(3)).unpack('L>').first; end
+    def ui32; read(4).unpack('L>').first; end
+    def ui64; read(8).unpack('Q>').first; end
+  else
+    def ui8; read(1).unpack('C').first; end
+    def ui16; read(2).unpack('n').first; end
+    def ui24; ("\000" + read(3)).unpack('N').first; end
+    def ui32; read(4).unpack('N').first; end
+    def ui64; read(8).unpack('NN').inject(0) { |s,v| (s << 32) + v }; end
+  end
 
   # Big-Endian Signed Readers
-  def si8; read(1).unpack('c').first; end
-  def si16; read(2).unpack('cC').inject(0) { |s,v| (s << 8) + v }; end
-  def si24; read(3).unpack('cCC').inject(0) { |s,v| (s << 8) + v }; end
-  def si32; read(4).unpack('cCCC').inject(0) { |s,v| (s << 8) + v }; end
-  def si64; read(8).unpack('cCCCCCCC').inject(0) { |s,v| (s << 8) + v }; end
+  if RUBY_VERSION >= '2.0.0'
+    def si8; read(1).unpack('c').first; end
+    def si16; read(2).unpack('s>').first; end
+    def si24; ("\000" + read(3)).unpack('l>').first; end
+    def si32; read(4).unpack('l>').first; end
+    def si64; read(8).unpack('q>').first; end
+  else
+    def si8; read(1).unpack('c').first; end
+    def si16; read(2).unpack('cC').inject(0) { |s,v| (s << 8) + v }; end
+    def si24; read(3).unpack('cCC').inject(0) { |s,v| (s << 8) + v }; end
+    def si32; read(4).unpack('cCCC').inject(0) { |s,v| (s << 8) + v }; end
+    def si64; read(8).unpack('cCCCCCCC').inject(0) { |s,v| (s << 8) + v }; end
+  end
+
+  # Little-Endian Unsigned Readers
+  if RUBY_VERSION >= '2.0.0'
+    def ui8L; read(1).unpack('C').first; end
+    def ui16L; read(2).unpack('S<').first; end
+    def ui24L; (read(3) + "\000").unpack('L<').first; end
+    def ui32L; read(4).unpack('L<').first; end
+    def ui64L; read(8).unpack('Q<').first; end
+  else
+    # (Assuming Intel 64-bit architecture)
+    def ui8L; read(1).unpack('C').first; end
+    def ui16L; read(2).unpack('v').first; end
+    def ui24L; (read(3) + "\000").unpack('V').first; end
+    def ui32L; read(4).unpack('V').first; end
+    def ui64L; ui32L + (ui32L << 32); end
+  end
+  alias_method :byte, :ui8L
+  alias_method :word, :ui16L
+  alias_method :dword, :ui32L
+  alias_method :qword, :ui64L
+
+  # Little-Endian Signed Readers
+  if RUBY_VERSION >= '2.0.0'
+    def si8L; read(1).unpack('c').first; end
+    def si16L; read(2).unpack('s<').first; end
+    def si24L; (read(3) + "\000").unpack('l<').first; end
+    def si32L; read(4).unpack('l<').first; end
+    def si64L; read(8).unpack('q<').first; end
+  else
+    # (Assuming Intel 64-bit architecture)
+    def si8L; read(1).unpack('c').first; end
+    def si16L; read(2).unpack('s').first; end
+    def si24L; (read(3) + "\000").unpack('l').first; end
+    def si32L; read(4).unpack('l').first; end
+    def si64L; read(8).unpack('q').first; end
+  end
+  alias_method :char, :si8L
+  alias_method :short, :si16L
+  alias_method :int, :si32L
+  alias_method :long, :si64L
+
+  # In Windows, a long is a 32-bit signed little-endian
+  alias_method :winlong, :si32L
 
   # Big-Endian Float Readers
   def f32; read(4).unpack('g').first; end
   def f64; read(8).unpack('G').first; end
-
-  # Little-Endian Unsigned Readers (Assuming Intel 64-bit architecture)
-  def byte; read(1).unpack('C').first; end
-  def word; read(2).unpack('v').first; end
-  def dword; read(4).unpack('V').first; end
-  def qword; read(8).unpack('Q').first; end
-
-  # Little-Endian Signed Readers (Assuming Intel 64-bit architecture)
-  def char; read(1).unpack('c').first; end
-  def short; read(2).unpack('s').first; end
-  def int; read(4).unpack('l').first; end
-  def long; read(8).unpack('q').first; end
 
   # Little-Endian Float Readers
   def single; read(4).unpack('e').first; end
@@ -80,7 +127,9 @@ module IoHelpers
     v + b
   end
 
+  # Windows/ASF guid
   def guid; parts = read(16).unpack('VvvnNn'); sprintf('%08x-%04x-%04x-%04x-%08x%04x', *parts).upcase; end
+
   def fourcc; read(4).unpack('a*').first; end
 
   def read_wchars(count)
@@ -100,14 +149,22 @@ end
 require 'stringio'
 class StringIO
   include IoHelpers
+
+  def append(string)
+    orig_pos = pos
+    seek(0, IO::SEEK_END)
+    write(string)
+    seek(orig_pos)
+  end
 end
 
 
 class Bitstream
-  attr_accessor :bit_offset, :data
+  attr_accessor :bit_offset, :data, :total_bits
 
   def initialize(data_string, starting_byte_offset = 0)
     @data = data_string.kind_of?(String) ? data_string.bytes.to_a : data_string
+    @total_bits = @data.length * 8
     @bit_offset = 0
     @pos = starting_byte_offset
   end
@@ -129,10 +186,6 @@ class Bitstream
     value += getbits_internal(count)
   end
 
-  def skipbits(count)
-    @bit_offset += count
-  end
-
   # Do getbits, with up to 16 bits.
   def getbits_internal(count, increment_position = true)
     return 0 if count > 16 || count < 1
@@ -146,8 +199,13 @@ class Bitstream
     return val
   end
 
+  def skipbits(count)
+    @bit_offset += count
+  end
+
   def append(data_string)
     @data += data_string.bytes.to_a
+    @total_bits += data_string.length
   end
 
   # Remove any data that we've moved past already, so we don't build up too much in memory.
@@ -163,6 +221,8 @@ class Bitstream
       @pos = 0
     end
 
+    @total_bits = @data.length * 8
+
     true
   end
 
@@ -171,22 +231,25 @@ class Bitstream
       puts "Warning: Reading at non-aligned bitstream offset"
     end
     byte = @bit_offset / 8
-    @bit_offset = [@bit_offset + size * 8, @data.length * 8].min
+    @bit_offset = [@bit_offset + size * 8, @total_bits].min
     @data[byte,size].pack('C*')
   end
 
   def remaining_bits
-    @data.length * 8 - @bit_offset
+    @total_bits - @bit_offset
   end
 
   # Special data types
 
+  # H.264 Variable-length unsigned integer
   def ue_v
     power = 0
     power += 1 while (getbits(1) == 0 && (remaining_bits > 0))
     additional = getbits(power)
     2**power - 1 + additional
   end
+
+  # H.264 Variable-length signed integer
   def se_v
     k = ue_v
     (-1) ** (k+1) * (k / 2.0).ceil
@@ -200,9 +263,10 @@ end
 
 # Only do color on tty outputs.  So piping to mate works, etc.
 $DISABLE_COLOR = !STDOUT.tty?
+$DEFAULT_COLOR = :none
 
 # Colored print...
-def cprint(message, color = :none)
+def cprint(message, color = $DEFAULT_COLOR)
   colors = {
     :black => '0;30',
     :dark_gray => '1;30',
@@ -233,8 +297,16 @@ def cprint(message, color = :none)
   end
 end
 
-def cputs(message, color)
+def cputs(message, color = $DEFAULT_COLOR)
   cprint(message+"\n", color)
+end
+
+def with_color(color, &block)
+  prev_color = $DEFAULT_COLOR
+  $DEFAULT_COLOR = color
+  block.call
+ensure
+  $DEFAULT_COLOR = prev_color
 end
 
 # Just to show the colors, for reference.
