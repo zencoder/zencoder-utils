@@ -98,8 +98,13 @@ def decode_script_data(data, prefix = '', cur_pos = 0)
     array_len = data[cur_pos,4].unpack('N').first
     cur_pos += 4
     puts "#{prefix}ECMA array (length = #{array_len})"
-      
-    array_len.times do |i|
+
+    while true
+      if cur_pos >= data.length
+        puts "#{prefix}  RAN OUT OF ECMA ARRAY DATA!"
+        break
+      end
+
       name_len = data[cur_pos,2].unpack('n').first
       cur_pos += 2
       if name_len == 0
@@ -112,13 +117,16 @@ def decode_script_data(data, prefix = '', cur_pos = 0)
         name = data[cur_pos, name_len]
       end
       cur_pos += name_len
-        
+
       puts "#{prefix}  #{name}"
       cur_pos = decode_script_data(data, prefix + '    ', cur_pos)
 
-      break if cur_pos.nil?
-    end      
-      
+      if cur_pos.nil?
+        puts "#{prefix}  RAN OUT OF ECMA ARRAY DATA!"
+        break
+      end
+    end
+
   else
     puts "#{prefix}Unsupported data type #{data_type} found!"
     return nil
