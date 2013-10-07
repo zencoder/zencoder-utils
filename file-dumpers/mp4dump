@@ -2363,6 +2363,25 @@ class AvccSubBox < SubBox
             cputs "Color Description: primaries=#{color_primaries}, transfer=#{transfer_characteristics}, matrix=#{matrix_coefficients}", :dark_gray
           end
         end
+
+        chroma_loc_info_present_flag = unit.getbits(1)
+        if chroma_loc_info_present_flag == 1
+          chroma_sample_loc_type_top_field = unit.ue_v
+          chroma_sample_loc_type_bottom_field = unit.ue_v
+          print prefix+'  '
+          cputs "Chroma Sample Loc Type: top_field=#{chroma_sample_loc_type_top_field}, bottom_field=#{chroma_sample_loc_type_bottom_field}", :dark_gray
+        end
+
+        timing_info_present_flag = unit.getbits(1)
+        if timing_info_present_flag == 1
+          num_units_in_tick = unit.getbits(32)
+          time_scale = unit.getbits(32)
+          fixed_frame_rate_flag = unit.getbits(1)
+          print prefix+'  '
+          cputs "Timing Info: num_units_in_tick=#{num_units_in_tick}, time_scale=#{time_scale}, fixed_frame_rate_flag=#{fixed_frame_rate_flag}", :dark_gray
+        end
+
+        # After this comes nal_hrd params and vcl_hrd_params and all sorts of nonsense.
       end
     end
 
