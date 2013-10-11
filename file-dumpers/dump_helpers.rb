@@ -23,6 +23,11 @@ end
 
 module IoHelpers
 
+  # Skip forward and ignore a certain number of bytes, without reading them into memory.
+  def skip(count)
+    seek(count, IO::SEEK_CUR)
+  end
+
   # Big-Endian Unsigned Readers
   if RUBY_VERSION >= '2.0.0'
     def ui8; read(1).unpack('C').first; end

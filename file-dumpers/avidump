@@ -83,6 +83,15 @@ class IndexChunk < Chunk
 end
 
 class AviHeaderChunk < Chunk
+  FLAGS = {
+    'AVIF_HASINDEX' =>       0x00000010,
+    'AVIF_MUSTUSEINDEX' =>   0x00000020,
+    'AVIF_ISINTERLEAVED' =>  0x00000100,
+    'AVIF_TRUSTCKTYPE' =>    0x00000800,
+    'AVIF_WASCAPTUREFILE' => 0x00010000,
+    'AVIF_COPYRIGHTED' =>    0x00020000
+  }
+
   def data=(bytes)
     set_color :cyan
     pputs "  AVI HEADER:", :green
@@ -90,7 +99,9 @@ class AviHeaderChunk < Chunk
     pputs "  MicroSecPerFrame: #{header.ui32L}"
     pputs "  MaxBytesPerSec:   #{header.ui32L}"
     pputs "  Pad Granularity:  #{header.ui32L}", :dark_gray
-    pputs "  Flags:            #{header.ui32L}"
+    flags = header.ui32L
+    flagnames = FLAGS.keys.select { |flagname| flags & FLAGS[flagname] > 0 }
+    pputs "  Flags:            #{flags} (#{flagnames.join(', ')})"
     pputs "  Total Frames:     #{header.ui32L}"
     pputs "  Initial Frames:   #{header.ui32L}"
     pputs "  Streams:          #{header.ui32L}"
@@ -265,7 +276,9 @@ def read_list(prefix = '')
   kind = @input_file.read(4)
   data_size = size - 4
   list = List.new(kind)
-  puts "#{prefix}Found a '#{kind}' LIST of #{size} bytes at position #{@input_file.pos - 12}!"
+  list_data_start = @input_file.pos - 4
+
+  puts "#{prefix}Found a '#{kind}' LIST of #{size} bytes at position #{list_data_start - 8}!"
   
   while (list.size < data_size) && (item = read_item(prefix + '    '))
     # puts "#{kind} list size: #{list.size}, item size: #{item.total_size}, Expected size: #{data_size}"
@@ -273,6 +286,14 @@ def read_list(prefix = '')
     if item.kind_of?(StreamHeaderChunk)
       $current_format_type = item.format_type
     end
+    if item.size == 0
+      cputs "#{prefix}      INVALID LIST ENTRY FOUND: Size is 0 bytes.  Skipping rest of list!", :red
+      break
+    end
+  end
+
+  if @input_file.pos < (list_data_start + size)
+    @input_file.skip(list_data_start+size - @input_file.pos)
   end
 
   list
@@ -300,7 +321,7 @@ def read_chunk(kind, prefix = '')
   c
 end
 
-def read_item(prefix = '')
+def read_item(prefix = '', max_size = nil)
   if (@input_file.pos % 2) == 1
     extra = @input_file.read(1)
     cputs "Dumping extra byte!", :red
