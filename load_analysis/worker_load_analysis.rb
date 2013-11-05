@@ -81,27 +81,27 @@ SETS_TO_SHOW = simple_scale_analysis_sets_without_low_priority
 @end_time = START_TIME + DURATION
 @worker_types = {}
 @cloud = Cloud.find(CLOUD_ID)
-@cloud.worker_types.all.each { |wt| @worker_types[wt.id] = wt }
+@cloud.machine_types.all.each { |wt| @worker_types[wt.id] = wt }
 
 puts "#{Time.now} Querying database for data..."
 
-@workers = @cloud.workers.find(:all, :select => 'id,worker_type_id,state,created_at,alive_at,killed_at,updated_at,last_heartbeat_at,url,instance_id', :conditions => ["(killed_at >= ? OR (killed_at is null AND updated_at >= ?)) AND created_at < ?", @start_time, @start_time, @end_time])
+@workers = @cloud.workers.find(:all, :select => 'id,machine_type_id,state,created_at,alive_at,killed_at,updated_at,last_heartbeat_at,url,instance_id', :conditions => ["(killed_at >= ? OR (killed_at is null AND updated_at >= ?)) AND created_at < ?", @start_time, @start_time, @end_time])
 if ACCOUNT_ID != :all
   raise "Not yet optimized."
   @inputs = @cloud.input_media_files.find(:all, :select => 'id,account_id,job_id,state,created_at,started_at,finished_at,times,low_priority', :conditions => ["(finished_at is null or finished_at >= ?) and created_at < ? and state != 'cancelled' and account_id = ?", @start_time, @end_time, ACCOUNT_ID])
   @outputs = @cloud.output_media_files.find(:all, :select => 'id,account_id,job_id,state,created_at,started_at,updated_at,finished_at,times,low_priority,cached_queue_time,cached_total_time,estimated_transcode_load', :conditions => ["(finished_at is null or finished_at >= ?) and created_at < ? and state != 'cancelled' and account_id = ?", @start_time, @end_time, ACCOUNT_ID])
-elsif 0
+elsif false
   # Use this for disabling input/output collection.  Just for fast counts of worker info.
   @inputs = []
   @outputs = []
 else
   before = Time.now
   running_inputs =  @cloud.input_media_files.find(:all, :select => 'id,account_id,job_id,state,created_at,started_at,finished_at,times,low_priority,test', :conditions => ["finished_at is null and created_at < ? and state != 'cancelled'", @end_time])
-  puts "  Got running inputs. (#{Time.now-before} seconds)"
+  puts "  Got #{running_inputs.length} running inputs. (#{Time.now-before} seconds)"
 
   before = Time.now
   finished_inputs = @cloud.input_media_files.find(:all, :select => 'id,account_id,job_id,state,created_at,started_at,finished_at,times,low_priority,test', :conditions => ["finished_at >= ? and finished_at <= ? and created_at < ? and state != 'cancelled'", @start_time, @end_time + 3.hours, @end_time])
-  puts "  Got finished inputs. (#{Time.now-before} seconds)"
+  puts "  Got #{finished_inputs.length} finished inputs. (#{Time.now-before} seconds)"
 
   before = Time.now
   in_finished_set = {}
@@ -113,11 +113,11 @@ else
 
   before = Time.now
   running_outputs =  @cloud.output_media_files.find(:all, :select => 'id,account_id,job_id,state,created_at,started_at,updated_at,finished_at,times,low_priority,test,cached_queue_time,cached_total_time,estimated_transcode_load', :conditions => ["finished_at is null and created_at < ? and state = 'processing'", @end_time])
-  puts "  Got running outputs. (#{Time.now-before} seconds)"
+  puts "  Got #{running_outputs.length} running outputs. (#{Time.now-before} seconds)"
 
   before = Time.now
   finished_outputs = @cloud.output_media_files.find(:all, :select => 'id,account_id,job_id,state,created_at,started_at,updated_at,finished_at,times,low_priority,test,cached_queue_time,cached_total_time,estimated_transcode_load', :conditions => ["finished_at >= ? and finished_at <= ? and created_at < ? and state != 'cancelled'", @start_time, @end_time + 3.hours, @end_time])
-  puts "  Got finished outputs. (#{Time.now-before} seconds)"
+  puts "  Got #{finished_outputs.length} finished outputs. (#{Time.now-before} seconds)"
 
   before = Time.now
   in_finished_set = {}
@@ -137,9 +137,9 @@ before = Time.now
   # For now we ignore all debugging/stopped/etc workers.
   next unless worker.killed_at || ['launching','active','terminating','updating','disappeared'].include?(worker.state)
 
-  input_capacity = @worker_types[worker.worker_type_id].max_downloads || 6
-  output_capacity = @worker_types[worker.worker_type_id].target_load || 900
-  max_output_capacity = @worker_types[worker.worker_type_id].max_load || output_capacity
+  input_capacity = @worker_types[worker.machine_type_id].max_downloads || 6
+  output_capacity = @worker_types[worker.machine_type_id].target_load || 900
+  max_output_capacity = @worker_types[worker.machine_type_id].max_load || output_capacity
 
   created = worker.created_at.to_i
   updated = worker.updated_at.to_i
