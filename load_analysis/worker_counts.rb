@@ -1,5 +1,16 @@
 #/usr/bin/env ruby
 
+
+# BASH .bash_profile function to run this against the backup database server.
+#
+# function worker_counts {
+#     scp ~/zen/zencoder-utils/load_analysis/worker_counts.rb util2:
+#     ssh util2 "cd /data/zencoder/current_db4; script/rails runner -e production ~/worker_counts.rb $1 $2 $3 $4"
+#     scp util2:/data/zencoder/current_db4/worker_count_chart.html /tmp/
+#     open /tmp/worker_count_chart.html
+# }
+
+
 # Clear out any environment options.
 if ARGV.first == '-e'
   ARGV.shift(2)
