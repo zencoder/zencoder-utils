@@ -15,14 +15,14 @@ def numeric_arg_with_default(default_value)
 end
 
 hour_count = numeric_arg_with_default(6)
-cloud = numeric_arg_with_default(1)
+cloud = numeric_arg_with_default(1).round
 start_hour = numeric_arg_with_default(0)
 point_count = numeric_arg_with_default(1440)
 
 TIME_OFFSET = -7.hours
 CLOUD_ID = cloud
 ACCOUNT_ID = :all
-# ACCOUNT_ID = 2370
+# ACCOUNT_ID = 8501
 EXCLUDE_LOW_PRIORITY = true
 EXCLUDE_TEST_JOBS = true
 
@@ -87,7 +87,7 @@ puts "#{Time.now} Querying database for data..."
 
 @workers = @cloud.workers.find(:all, :select => 'id,machine_type_id,state,created_at,alive_at,killed_at,updated_at,last_heartbeat_at,url,instance_id', :conditions => ["(killed_at >= ? OR (killed_at is null AND updated_at >= ?)) AND created_at < ?", @start_time, @start_time, @end_time])
 if ACCOUNT_ID != :all
-  raise "Not yet optimized."
+  # raise "Not yet optimized."
   @inputs = @cloud.input_media_files.find(:all, :select => 'id,account_id,job_id,state,created_at,started_at,finished_at,times,low_priority', :conditions => ["(finished_at is null or finished_at >= ?) and created_at < ? and state != 'cancelled' and account_id = ?", @start_time, @end_time, ACCOUNT_ID])
   @outputs = @cloud.output_media_files.find(:all, :select => 'id,account_id,job_id,state,created_at,started_at,updated_at,finished_at,times,low_priority,cached_queue_time,cached_total_time,estimated_transcode_load', :conditions => ["(finished_at is null or finished_at >= ?) and created_at < ? and state != 'cancelled' and account_id = ?", @start_time, @end_time, ACCOUNT_ID])
 elsif false
