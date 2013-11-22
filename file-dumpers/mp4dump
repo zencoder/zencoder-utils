@@ -935,13 +935,17 @@ class SdtpBox < Box
     @sample_count = nil
     @entries = []
     @entry_count = nil
+    @implicit_entry_count = false
     super
   end
 
   def read_data(stream)
     @version,@flags = stream.ui8, stream.ui24
     @entry_count = lookup_sample_count rescue -1
-    return unless @entry_count >= 0
+    if @entry_count < 0
+      @implicit_entry_count = true
+      @entry_count = (@data_size - 4)
+    end
     @entry_count.times do
       flags = stream.ui8
       @entries << {
@@ -953,17 +957,17 @@ class SdtpBox < Box
   end
 
   def print_extra_info(prefix = '')
-    value_names = ['Unknown','Yes','No','Invalid/Reserved']
-    print prefix
-    if @entry_count == -1
-      cputs "File order didn't allow inline decoding...", :red
-    else
-      cputs "Entry Count: #{@entry_count}", :dark_gray
+    value_names = ['Unknown','Yes',' No','Invalid/Reserved']
+    if @implicit_entry_count
+      print prefix
+      cputs "File order required using implicit entry count.", :red
     end
+    print prefix
+    cputs "Entry Count: #{@entry_count}", :dark_gray
     if $VERBOSE
-      @entries.each do |entry|
+      @entries.each_with_index do |entry,i|
         print prefix
-        cputs "Depends On Others: #{value_names[entry[:depends_on]]}, Depended On By Others: #{value_names[entry[:depended_on]]}, Has Redundancy: #{value_names[entry[:redundancy]]}", :dark_gray
+        cputs "Sample #{i+1}: Depends On Others: #{value_names[entry[:depends_on]]}, Depended On By Others: #{value_names[entry[:depended_on]]}, Has Redundancy: #{value_names[entry[:redundancy]]}", :dark_gray
       end
     end
   end
