@@ -370,6 +370,12 @@ class TkhdBox < Box
     
     if $VERBOSE
       print prefix
+      cputs "Matrix: [#{@matrix_ABCD[0]}, #{@matrix_ABCD[1]}, x]", :dark_gray
+      print prefix
+      cputs "        [#{@matrix_ABCD[2]}, #{@matrix_ABCD[3]}, x]", :dark_gray
+      print prefix
+      cputs "        [  x,   x, x]", :dark_gray
+      print prefix
       cputs "Enabled: #{(@flags & 1) > 0 ? 'Yes' : 'No'}", :dark_gray
       print prefix
       cputs "In Movie: #{(@flags & 2) > 0 ? 'Yes' : 'No'}", :dark_gray
@@ -1638,6 +1644,8 @@ class EsdsSubBox < SubBox
   def read_data(stream)
     super
     return unless @data
+
+    @core_coder_delay = nil
 
     version = @data_stream.ui8
     flags = @data_stream.ui24
