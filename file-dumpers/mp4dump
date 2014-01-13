@@ -21,6 +21,7 @@ class BoxFile
     while (box = Box.read(@data))
       boxes << box
       break if box.size == 0 # Zero size means it extends to the end of the file.
+      break if !box.valid
     end
     self
   end
@@ -37,7 +38,7 @@ end
 
 class Box
   attr_accessor :base_offset, :kind, :size, :data_size
-  attr_accessor :data_offset, :data, :data_stream, :parent, :children
+  attr_accessor :data_offset, :data, :data_stream, :parent, :children, :valid
 
   # Register each box kind with what handles it.
   HANDLERS = {}
@@ -84,6 +85,11 @@ class Box
     if stream.pos < @base_offset + @size
       stream.seek(@base_offset + @size)
     end
+
+    @valid = true
+  rescue => e
+    STDERR.puts e.inspect
+    STDERR.puts "  " + e.backtrace.join("\n  ")
   end
 
   def read_data(stream)
@@ -2114,6 +2120,18 @@ class AvccSubBox < SubBox
     print_sps_units(prefix+'  ')# if $VERBOSE
     print prefix
     cputs "Picture Set Count: #{@picture_set_count}", :dark_gray
+    if $VERBOSE
+      @pps_units.each do |pps_unit|
+        print prefix+'  '
+        cputs "Picture Parameter Set: #{pps_unit.hex}", :dark_gray
+      end
+      print_pps_units(prefix+'  ')
+    end
+  end
+
+  def print_pps_units(prefix = '')
+    @pps_units.each do |unit_data|
+    end
   end
 
   def print_sps_units(prefix = '')
@@ -2394,7 +2412,58 @@ class AvccSubBox < SubBox
         end
 
         # After this comes nal_hrd params and vcl_hrd_params and all sorts of nonsense.
-      end
+        nal_hrd_present_flag = unit.getbits(1)
+        if nal_hrd_present_flag == 1
+          print prefix+'  '
+          cputs "NAL/HRD present! (Not decoding...)", :dark_gray
+          return
+        end
+
+        vcl_hrd_present_flag = unit.getbits(1)
+        if vcl_hrd_present_flag == 1
+          print prefix+'  '
+          cputs "VCL/HRD present! (Not decoding...)", :dark_gray
+          return
+        end
+
+        if nal_hrd_present_flag == 1 || vcl_hrd_present_flag == 1
+          low_delay_hrd_flag = unit.getbits(1)
+        end
+
+        pic_struct_present_flag = unit.getbits(1)
+
+        bitstream_restriction_flag = unit.getbits(1)
+        if bitstream_restriction_flag == 1
+          motion_vectors_over_pic_boundaries_flag = unit.getbits(1)
+          max_bytes_per_pic_denom = unit.ue_v
+          max_bits_per_mb_denom = unit.ue_v
+          log2_max_mv_length_horizontal = unit.ue_v
+          log2_max_mv_length_vertical = unit.ue_v
+          num_reorder_frames = unit.ue_v
+          max_dec_frame_buffering = unit.ue_v
+
+          if $VERBOSE2
+            print prefix+'  '
+            cputs "Bitstream restriction settings:", :dark_gray
+
+            print prefix+'    '
+            cputs "motion_vectors_over_pic_boundaries_flag = #{motion_vectors_over_pic_boundaries_flag}", :dark_gray
+            print prefix+'    '
+            cputs "max_bytes_per_pic_denom                 = #{max_bytes_per_pic_denom}", :dark_gray
+            print prefix+'    '
+            cputs "max_bits_per_mb_denom                   = #{max_bits_per_mb_denom}", :dark_gray
+            print prefix+'    '
+            cputs "log2_max_mv_length_horizontal           = #{log2_max_mv_length_horizontal}", :dark_gray
+            print prefix+'    '
+            cputs "log2_max_mv_length_vertical             = #{log2_max_mv_length_vertical}", :dark_gray
+            print prefix+'    '
+            cputs "num_reorder_frames                      = #{num_reorder_frames}", :dark_gray
+            print prefix+'    '
+            cputs "max_dec_frame_buffering                 = #{max_dec_frame_buffering}", :dark_gray
+          end
+        end
+
+      end # vui parameters
     end
 
   end
@@ -2446,7 +2515,9 @@ error "Input file not found." unless File.exist?(input_filename)
 file_size = File.size(input_filename)
 input_file = File.open(input_filename)
 
-file = BoxFile.new(input_file)
-file.parse
-
-file.print_tree
+begin
+  file = BoxFile.new(input_file)
+  file.parse
+ensure
+  file.print_tree
+end
