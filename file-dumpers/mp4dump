@@ -2076,6 +2076,8 @@ class AvccSubBox < SubBox
      32 => 'Extended'
   }
 
+  CHROMA_FORMAT = ['Mono','4:2:0','4:2:2','4:4:4']
+
   attr_accessor :sps_units, :pps_units
 
   def read_header_data(stream)
@@ -2307,7 +2309,7 @@ class AvccSubBox < SubBox
       cputs "Max Ref Frames: #{max_num_ref_frames}", :dark_gray
 
       print prefix+'  '
-      cputs "Chroma Format: #{chroma_format_idc} (" + (['Mono','4:2:0','4:2:2','4:4:4'][chroma_format_idc] || 'Unknown') + ")", :dark_gray
+      cputs "Chroma Format: #{chroma_format_idc} (" + (CHROMA_FORMAT[chroma_format_idc] || 'Unknown') + ")", :dark_gray
       print prefix+'  '
       cputs "Bit Depth: #{bit_depth_luma_minus8 + 8} (luma), #{bit_depth_chroma_minus8 + 8} (chroma)", :dark_gray
       print prefix+'  '
@@ -2504,6 +2506,8 @@ class HvccSubBox < SubBox
       1 => 'High'
   }
 
+  CHROMA_FORMAT = ['Mono','4:2:0','4:2:2','4:4:4']
+
   PARALLELISM_TYPE = [
       'Mixed types or Unknown',
       'Slice based',
@@ -2635,7 +2639,7 @@ class HvccSubBox < SubBox
 
 
     print prefix
-    cputs "Chroma Format: #{@chroma_format_idc} (" + (['Mono','4:2:0','4:2:2','4:4:4'][@chroma_format_idc] || 'Unknown') + ")", :dark_gray
+    cputs "Chroma Format: #{@chroma_format_idc} (" + (CHROMA_FORMAT[@chroma_format_idc] || 'Unknown') + ")", :dark_gray
     print prefix
     cputs "Bit Depth: #{@bit_depth_luma_minus8 + 8} (luma), #{@bit_depth_chroma_minus8 + 8} (chroma)", :dark_gray
 
