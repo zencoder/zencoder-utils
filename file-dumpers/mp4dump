@@ -1511,6 +1511,7 @@ end
 class Mp4vSubBox < SubBoxWithSubBoxes
   handles 'mp4v', 'MP4 Video Description'
   handles 'avc1', 'H264 Video Description'
+  handles 'hvc1', 'HEVC Video Description'
   handles 'jpeg', 'JPEG Video Description'
   handles 'hdva', 'HDV Video Description'
 
@@ -2487,6 +2488,170 @@ class AvccSubBox < SubBox
 
 end
 
+class HvccSubBox < SubBox
+  handles 'hvcC', 'HVC Configuration'
+
+  # see http://tools.ietf.org/html/draft-ietf-payload-rtp-h265-02 (page 45)
+
+  PROFILES = {
+      1 => 'Main',
+      2 => 'Main_10',
+      3 => 'Main_Still_Picture'
+  }
+
+  TIERS = {
+      0 => 'Main',
+      1 => 'High'
+  }
+
+  PARALLELISM_TYPE = [
+      'Mixed types or Unknown',
+      'Slice based',
+      'Tile based',
+      'Entropy coding synchronization based / WPP: Wavefront Parallel Processing'
+  ]
+
+  NALU_TYPE = [
+      'NAL_SLICE_TRAIL_N',
+      'NAL_SLICE_TRAIL_R',
+      'NAL_SLICE_TSA_N',
+      'NAL_SLICE_TSA_R',
+      'NAL_SLICE_STSA_N',
+      'NAL_SLICE_STSA_R',
+      'NAL_SLICE_RADL_N',
+      'NAL_SLICE_RADL_R',
+      'NAL_SLICE_RASL_N',
+      'NAL_SLICE_RASL_R',
+      '', '', '', '', '', '',
+      'NAL_SLICE_BLA_W_LP',
+      'NAL_SLICE_BLA_W_RADL',
+      'NAL_SLICE_BLA_N_LP',
+      'NAL_SLICE_IDR_W_RADL',
+      'NAL_SLICE_IDR_N_LP',
+      'NAL_SLICE_CRA_NUT',
+      '', '', '', '', '',
+      '', '', '', '', '',
+      'NAL_VPS',
+      'NAL_SPS',
+      'NAL_PPS',
+      'NAL_AUD',
+      'NAL_EOS',
+      'NAL_EOB',
+      'NAL_FD',
+      'NAL_PREFIX_SEI',
+      'NAL_SUFFIX_SEI'
+  ]
+
+  attr_accessor :sps_units, :pps_units, :vps_units
+
+  def read_header_data(stream)
+    @version = stream.ui8
+    # TODO version 0 vs 1
+    next_byte = stream.ui8
+    @general_profile_space = (next_byte >> 6) & 0x03
+    @general_tier_flag = (next_byte >> 5) & 0x01
+    @general_profile_idc = next_byte & 0x1f
+    @profile_compatibility_flags = stream.ui32
+    @constraint_indicator_flags = []
+    6.times do |n|
+      @constraint_indicator_flags << stream.ui8
+    end
+    @progressive_source    = (@constraint_indicator_flags[0] & 0b10000000) >> 7
+    @interlaced_source     = (@constraint_indicator_flags[0] & 0b01000000) >> 6
+    @non_packed_constraint = (@constraint_indicator_flags[0] & 0b00100000) >> 5
+    @frame_only_constraint = (@constraint_indicator_flags[0] & 0b00010000) >> 4
+    @level_idc = stream.ui8
+    @min_spatial_segmentation_idc = stream.ui16 & 0x0fff
+    @parallelism_type = (stream.ui8 >> 2 ) & 0x03
+    @chroma_format_idc = stream.ui8 & 0x03
+    @bit_depth_luma_minus8 = stream.ui8 & 0x07
+    @bit_depth_chroma_minus8 = stream.ui8 & 0x07
+
+    @average_fps = stream.ui16
+    next_byte = stream.ui8
+    @constant_fps = (next_byte >> 6) & 0x03
+    @number_temporal_layers = (next_byte >> 3) & 0x07
+    @temporal_id_nested = (next_byte >> 2) & 0x01
+    @length_size_minus_one = next_byte & 0x03
+
+    number_of_arrays = stream.ui8
+    @vps_units = []
+    @sps_units = []
+    @pps_units = []
+    number_of_arrays.times do |i|
+      next_byte = stream.ui8
+      # ever false here?
+      array_completeness = (next_byte >> 7) & 0x01
+      nal_unit_type = next_byte & 0x3F
+      num_nalus = stream.ui16
+      num_nalus.times do |j|
+        nal_unit_length = stream.ui16
+        nalu = stream.read(nal_unit_length)
+        case nal_unit_type
+        when 32
+          @vps_units << nalu
+        when 33
+          @sps_units << nalu
+        when 34
+          @pps_units << nalu
+        end
+      end
+    end
+
+    # TODO parse nalus
+    #   see http://ffmpeg.org/doxygen/trunk/hevc__ps_8c_source.html
+
+  end
+
+  def print_extra_info(prefix = '')
+    print prefix
+    cputs "Version: #{@version}", :dark_gray
+    print prefix
+    cputs "Profile: #{@general_profile_idc} (#{PROFILES[@general_profile_idc] || 'Unknown'}), Profile Space: #{@general_profile_space}", :dark_gray
+    print prefix
+    cputs "Tier: #{TIERS[@general_tier_flag] || 'Unknown'}", :dark_gray
+    print prefix
+    cputs "Level: #{sprintf('%0.1f', @level_idc / 30.0)}", :dark_gray
+    print prefix
+    cputs "Profile Compatibility: [#{@profile_compatibility_flags.to_s(2).rjust(32, '0')}]", :dark_gray
+    #constraint_flag_view = []
+    #6.times do |n|
+    #  constraint_flag_view << @constraint_indicator_flags[n].to_s(2).rjust(8, '0')
+    #end
+    #print prefix
+    #cputs "Constraint Indicator Flags: [#{constraint_flag_view.join('],[')}]", :dark_gray
+    print prefix
+    cputs "Progressive Source: #{!@progressive_source.zero?}", :dark_gray
+    print prefix
+    cputs "Interlaced Source: #{!@interlaced_source.zero?}", :dark_gray
+    print prefix
+    cputs "Non-Packed: #{!@non_packed_constraint.zero?}", :dark_gray
+    print prefix
+    cputs "Frame-Only: #{!@frame_only_constraint.zero?}", :dark_gray
+    print prefix
+    cputs "Min Spatial Segmentation IDC: #{@min_spatial_segmentation_idc}", :dark_gray
+    print prefix
+    cputs "Parallelism Type: #{PARALLELISM_TYPE[@parallelism_type]}", :dark_gray
+
+
+    print prefix
+    cputs "Chroma Format: #{@chroma_format_idc} (" + (['Mono','4:2:0','4:2:2','4:4:4'][@chroma_format_idc] || 'Unknown') + ")", :dark_gray
+    print prefix
+    cputs "Bit Depth: #{@bit_depth_luma_minus8 + 8} (luma), #{@bit_depth_chroma_minus8 + 8} (chroma)", :dark_gray
+
+    print prefix
+    cputs "Average FPS: #{@average_fps}", :dark_gray
+    print prefix
+    cputs "Constant FPS: #{@constant_fps}", :dark_gray
+    print prefix
+    cputs "Num Temporal Layers: #{@number_temporal_layers}", :dark_gray
+    print prefix
+    cputs "Temporal Id Nested: #{@temporal_id_nested}", :dark_gray
+    print prefix
+    cputs "Length Size: #{@length_size_minus_one+1}", :dark_gray
+  end
+
+end
 
 #################################################################################
 
