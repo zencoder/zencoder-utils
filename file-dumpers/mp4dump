@@ -1361,26 +1361,58 @@ end
 class TfraBox < Box
   handles 'tfra', 'Track Fragment Random Access'
 
-  attr_accessor :version, :flags, :track_id, :entry_count
+  attr_accessor :version, :flags, :track_id, :entry_count, :entries
+
+  SIZE_READ_METHODS = {
+    0 => :ui8,
+    1 => :ui16,
+    2 => :ui24,
+    3 => :ui32
+  }
 
   def initialize(*args)
     @version = nil
     @flags = nil
     @track_id = nil
     @entry_count = nil
+    @entries = []
     super
   end
 
   def read_data(stream)
     @version,@flags = stream.ui8, stream.ui24
     @track_id = stream.ui32
-    reserved_and_lengths = stream.ui32
+    length_sizes = stream.ui32
+    size_of_traf_num = (length_sizes & 0b110000) >> 4
+    size_of_trun_num = (length_sizes & 0b1100) >> 2
+    size_of_sample_num = (length_sizes & 0b11)
     @entry_count = stream.ui32
+    @entry_count.times do
+      entry = {}
+      if @version == 1
+        entry[:time] = stream.ui64
+        entry[:moof_offset] = stream.ui64
+      else
+        entry[:time] = stream.ui32
+        entry[:moof_offset] = stream.ui32
+      end
+      entry[:traf_number] = stream.send(SIZE_READ_METHODS[size_of_traf_num])
+      entry[:trun_number] = stream.send(SIZE_READ_METHODS[size_of_trun_num])
+      entry[:sample_number] = stream.send(SIZE_READ_METHODS[size_of_sample_num])
+      @entries << entry
+    end
   end
 
   def print_extra_info(prefix = '')
     print prefix
     cputs "Entry Count: #{@entry_count}", :dark_gray
+
+    if $VERBOSE
+      @entries.each do |entry|
+        print prefix
+        cputs "Entry Info: #{entry.inspect}", :dark_gray
+      end
+    end
   end
 end
 
