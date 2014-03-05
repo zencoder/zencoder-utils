@@ -768,7 +768,7 @@ while more_to_read
           end
 
         else
-          puts "    ERROR: AudioSpecificConfig too small! Assuming stream info is accurate."
+          puts "    ERROR: AudioSpecificConfig too small! (Is #{audio_specific_config.length} bytes - need at least 2.) Assuming stream info is accurate."
         end
       end
     else
@@ -875,9 +875,10 @@ while more_to_read
       elsif packet_type == 1
         puts "  PTS: %0.3f" % (full_timestamp / 1000.0)
       elsif packet_type == 0
-        avcc = input_file.read(size - bytes_read)
+        avcc_size = size - bytes_read
+        avcc = input_file.read(avcc_size)
         bytes_read = size
-        puts "  AvcC:"
+        puts "  AvcC (#{avcc_size} bytes):"
         begin
           AvccDecoder.new(avcc).dump('    ')
         rescue
