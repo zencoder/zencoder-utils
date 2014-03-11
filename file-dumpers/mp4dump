@@ -688,7 +688,7 @@ class SubBoxWithSubBoxes < SubBox
   def print_extra_info(prefix = '')
     return unless @content_is_tags
     print prefix
-    cputs "Audio Type: #{@audio_type}", :dark_gray
+    cputs "Object Type: #{@object_type}", :dark_gray
     print prefix
     cputs "Bitrate: #{@bitrate}", :dark_gray
     print prefix
@@ -712,7 +712,7 @@ class SubBoxWithSubBoxes < SubBox
         @data_stream.read(3)
         parse_tags(len - 3)
       when 4 # decoder_config_descr_tag -- the one we want.
-        @audio_type = @data_stream.ui8
+        @object_type = @data_stream.ui8
         @data_stream.ui32 # Unknown
         @max_bitrate = @data_stream.ui32
         @bitrate = @data_stream.ui32
@@ -1602,6 +1602,41 @@ class EsdsSubBox < SubBox
 
   attr_reader :max_bitrate, :bitrate, :audio_type
 
+  MPEG4_DESCRIPTOR_OBJECT_TYPES = {
+    1   => 'System V1',
+    2   => 'System V2',
+    32  => 'MPEG-4 Video',
+    33  => 'MPEG-4 AVC SPS',
+    34  => 'MPEG-4 AVC PPS',
+    64  => 'MPEG-4 Audio',
+    96  => 'MPEG-2 Simple Video',
+    97  => 'MPEG-2 Main Video',
+    98  => 'MPEG-2 SNR Video',
+    99  => 'MPEG-2 Spatial Video',
+    100 => 'MPEG-2 High Video',
+    101 => 'MPEG-2 4:2:2 Video',
+    102 => 'MPEG-4 ADTS Main',
+    103 => 'MPEG-4 ADTS Low Complexity',
+    104 => 'MPEG-4 ADTS Scalable Sampling Rate',
+    105 => 'MPEG-2 ADTS',
+    106 => 'MPEG-1 Video',
+    107 => 'MPEG-1 ADTS',
+    108 => 'JPEG Video',
+    192 => 'Private Audio',
+    208 => 'Private Video',
+    224 => '16-bit PCM Little-Endian Audio',
+    225 => 'Vorbis Audio',
+    226 => 'Dolby V3 (AC3) Audio',
+    227 => 'A-Law Audio',
+    228 => 'Mu-Law Audio',
+    229 => 'G723 ADPCM Audio',
+    230 => '16-bit PCM Big-Endian Audio',
+    240 => 'YCbCr 4:2:0 (YV12) Video',
+    241 => 'H.264 Video',
+    242 => 'H.263 Video',
+    243 => 'H.261 Video'
+  }
+
   MPEG4_AUDIO_OBJECT_TYPES = {
     0 => "Null",
     1 => "AAC Main",
@@ -1694,7 +1729,7 @@ class EsdsSubBox < SubBox
 
   def print_extra_info(prefix = '')
     print prefix
-    cputs "Audio Type: #{@audio_type}", :dark_gray
+    cputs "Object Type: #{@object_type} - #{MPEG4_DESCRIPTOR_OBJECT_TYPES[@object_type] || 'Unknown'}", :dark_gray
     print prefix
     cputs "Buffer Size: #{@buffer_size}", :dark_gray
     print prefix
@@ -1705,7 +1740,7 @@ class EsdsSubBox < SubBox
       print prefix
       cputs "Audio Specifc Config:", :dark_gray
       print prefix
-      cputs "  Audio Object Type: #{@audio_object_type} - #{MPEG4_AUDIO_OBJECT_TYPES[@audio_object_type]}", :dark_gray
+      cputs "  Audio Object Type: #{@audio_object_type} - #{MPEG4_AUDIO_OBJECT_TYPES[@audio_object_type] || 'Unknown'}", :dark_gray
       print prefix
       cputs "  Sampling Frequency: #{@frequency}", :dark_gray
       print prefix
@@ -1728,6 +1763,45 @@ class EsdsSubBox < SubBox
     
   end
 
+  # Tag kinds (from http://www.protocols.com/pbook/audiov.htm ):
+  # 0x00 Forbidden
+  # 0x01 ObjectDescrTag
+  # 0x02 InitialObjectDescrTag
+  # 0x03 ES_DescrTag
+  # 0x04 DecoderConfigDescrTag
+  # 0x05 DecSpecificInfoTag
+  # 0x06 SLConfigDescrTag
+  # 0x07 ContentIdentDescrTag
+  # 0x08 SupplContentIdentDescrTag
+  # 0x09 IPI_DescrPointerTag
+  # 0x0A IPMP_DescrPointerTag
+  # 0x0B IPMP_DescrTag
+  # 0x0C QoS_DescrTag
+  # 0x0D RegistrationDescrTag
+  # 0x0E ES_ID_IncTag
+  # 0x0F ES_ID_RefTag
+  # 0x10 MP4_IOD_Tag
+  # 0x11 MP4_OD_Tag
+  # 0x12 IPL_DescrPointerRefTag
+  # 0x13 ExtendedProfileLevelDescrTag
+  # 0x14 profileLevelIndicationIndexDescrTag
+  # 0x15-0x3F Reserved for ISO use
+  # 0x40 ContentClassificationDescrTag
+  # 0x41 KeyWordDescrTag
+  # 0x42 RatingDescrTag
+  # 0x43 LanguageDescrTag
+  # 0x44 ShortTextualDescrTag
+  # 0x45 ExpandedTextualDescrTag
+  # 0x46 ContentCreatorNameDescrTag
+  # 0x47 ContentCreationDateDescrTag
+  # 0x48 OCICreatorNameDescrTag
+  # 0x49 OCICreationDateDescrTag
+  # 0x4A SmpteCameraPositionDescrTag
+  # 0x4B-0x5F Reserved for ISO use (OCI extensions)
+  # 0x60-0xBF Reserved for ISO use
+  # 0xC0-0xFE User private
+  # 0xFF Forbidden
+
   def parse_tags(data_size = @data_size)
     while @data_stream.pos < data_size
       kind = @data_stream.ui8
@@ -1741,8 +1815,11 @@ class EsdsSubBox < SubBox
         @data_stream.read(3)
         parse_tags(len - 3)
       when 4 # decoder_config_descr_tag -- the one we want.
-        @audio_type = @data_stream.ui8
-        @stream_flags = @data_stream.ui8
+        @object_type = @data_stream.ui8
+        stream_flags = @data_stream.ui8
+        @stream_type = (stream_flags >> 2)
+        @upstream_flag = (stream_flags >> 1) & 1
+        @reserved_flag = stream_flags & 1
         @buffer_size = @data_stream.ui24
         @max_bitrate = @data_stream.ui32
         @bitrate = @data_stream.ui32
@@ -1755,7 +1832,7 @@ class EsdsSubBox < SubBox
         @dec_specific_info = @data_stream.read(len)
 
         # Try decoding if it looks like an audio specific config.
-        if len >= 2
+        if len >= 2 && @object_type == 64
           decode_asc(@dec_specific_info)
         end
 
