@@ -5,25 +5,42 @@ def cur_time_string
   "[#{Time.now.utc.strftime('%F %T %z')}]"
 end
 
-puts "#{cur_time_string} Begin script run"
-
-assignment_retry_timeout = Zencoder::Config.get(:assignment_retry_timeout, 2).minutes
-
-stuck_inputs = InputMediaFile.with_state(:assigning).find(:all, :select => 'id', :conditions => ["updated_at < ?", assignment_retry_timeout.ago])
-
-stuck_inputs.each do |input|
-  puts "#{cur_time_string} Fixing input #{input.id}"
-  # Only change it back to waiting if it's still assigning.
-  InputMediaFile.update_all({ :worker_id => nil, :state => 'waiting' }, { :id => input.id, :state => 'assigning' })
+def redis_queues_in_normal_range(host)
+  queue = Zencoder::Redis::Queue.connect(host)
+  queue.length("worker_comm_input") < 300 && queue.length("worker_comm_output") < 300
 end
 
-stuck_outputs = OutputMediaFile.with_state(:assigning).find(:all, :select => 'id', :conditions => ["updated_at < ?", assignment_retry_timeout.ago])
+puts "#{cur_time_string} Begin script run"
 
-stuck_outputs.each do |output|
-  puts "#{cur_time_string} Fixing output #{output.id}"
-  # Only change it back to ready if it's still assigning.
-  OutputMediaFile.update_all({ :worker_id => nil, :state => 'ready' }, { :id => output.id, :state => 'assigning' })
+# Proceed only if the number of queued items in Redis is in the normal 
+# range.  A high number could indicate slow/disrupted network connectivity,
+# which is not grounds for reassigning items.  In fact, reassinging items
+# could lead to duplicate assignment and a thundering-herd situation once
+# connectivity is restored (4/30/2014 EC2 incident).
+# 
+# Will check the Redis queue length on utility1 and utility2(localhost)
+if redis_queues_in_normal_range("utility1.fal.zencoderdns.net:6379/1") &&
+   redis_queues_in_normal_range("127.0.0.1:6379/1")
+
+  assignment_retry_timeout = Zencoder::Config.get(:assignment_retry_timeout, 2).minutes
+
+  stuck_inputs = InputMediaFile.with_state(:assigning).find(:all, :select => 'id', :conditions => ["updated_at < ?", assignment_retry_timeout.ago])
+
+  stuck_inputs.each do |input|
+    puts "#{cur_time_string} Fixing input #{input.id}"
+    # Only change it back to waiting if it's still assigning.
+    InputMediaFile.update_all({ :worker_id => nil, :state => 'waiting' }, { :id => input.id, :state => 'assigning' })
+  end
+
+  stuck_outputs = OutputMediaFile.with_state(:assigning).find(:all, :select => 'id', :conditions => ["updated_at < ?", assignment_retry_timeout.ago])
+
+  stuck_outputs.each do |output|
+    puts "#{cur_time_string} Fixing output #{output.id}"
+    # Only change it back to ready if it's still assigning.
+    OutputMediaFile.update_all({ :worker_id => nil, :state => 'ready' }, { :id => output.id, :state => 'assigning' })
+  end
+else
+  puts "Aborting, Redis queues have a large backlog which could be an indication of network connectivity issues."
 end
 
 puts "#{cur_time_string} End script run"
-
