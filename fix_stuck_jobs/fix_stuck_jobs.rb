@@ -2,7 +2,7 @@
 # Note that we have a separate stuck-assigning monitor that should be set to at least a minute longer than this one.
 
 def cur_time_string
-  "[#{Time.now.utc.strftime('%F %T %z')}]"
+  "[#{Time.now.utc.to_s(:logging)}]"
 end
 
 def redis_queues_in_normal_range(host)
@@ -10,7 +10,11 @@ def redis_queues_in_normal_range(host)
   queue.length("worker_comm_input") < 300 && queue.length("worker_comm_output") < 300
 end
 
-puts "#{cur_time_string} Begin script run"
+def log(message)
+  puts "#{cur_time_string} #{message}"
+end
+
+log "Begin script run"
 
 locked = Locker.run("fix_stuck_jobs") do
   # Proceed only if the number of queued items in Redis is in the normal
@@ -28,7 +32,7 @@ locked = Locker.run("fix_stuck_jobs") do
     stuck_inputs = InputMediaFile.with_state(:assigning).find(:all, :select => 'id', :conditions => ["updated_at < ?", assignment_retry_timeout.ago])
 
     stuck_inputs.each do |input|
-      puts "#{cur_time_string} Fixing input #{input.id}"
+      log "Fixing input #{input.id}"
       # Only change it back to waiting if it's still assigning.
       InputMediaFile.update_all({ :worker_id => nil, :state => 'waiting' }, { :id => input.id, :state => 'assigning' })
     end
@@ -36,17 +40,17 @@ locked = Locker.run("fix_stuck_jobs") do
     stuck_outputs = OutputMediaFile.with_state(:assigning).find(:all, :select => 'id', :conditions => ["updated_at < ?", assignment_retry_timeout.ago])
 
     stuck_outputs.each do |output|
-      puts "#{cur_time_string} Fixing output #{output.id}"
+      log "Fixing output #{output.id}"
       # Only change it back to ready if it's still assigning.
       OutputMediaFile.update_all({ :worker_id => nil, :state => 'ready' }, { :id => output.id, :state => 'assigning' })
     end
 
-    puts "No stuck files to fix" if stuck_inputs.empty? && stuck_outputs.empty?
+    log "No stuck files to fix" if stuck_inputs.empty? && stuck_outputs.empty?
   else
-    puts "Aborting, Redis queues have a large backlog which could be an indication of network connectivity issues."
+    log "Aborting, Redis queues have a large backlog which could be an indication of network connectivity issues."
   end
 end
 
-puts "Unable to obtain lock, another script must be running" unless locked
+log "Unable to obtain lock, another script must be running" unless locked
 
-puts "#{cur_time_string} End script run"
+log "End script run"
