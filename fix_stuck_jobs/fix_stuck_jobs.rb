@@ -12,7 +12,7 @@ end
 
 puts "#{cur_time_string} Begin script run"
 
-locked = Zencoder::Locker.run("fix_stuck_jobs") do
+locked = Locker.run("fix_stuck_jobs") do
   # Proceed only if the number of queued items in Redis is in the normal
   # range.  A high number could indicate slow/disrupted network connectivity,
   # which is not grounds for reassigning items.  In fact, reassinging items
@@ -45,6 +45,6 @@ locked = Zencoder::Locker.run("fix_stuck_jobs") do
   end
 end
 
-puts "Unable to obtain lock, another script must be running" if !locked
+puts "Unable to obtain lock, another script must be running" unless locked
 
 puts "#{cur_time_string} End script run"
