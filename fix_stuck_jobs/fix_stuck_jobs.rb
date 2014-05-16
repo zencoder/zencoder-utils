@@ -40,6 +40,8 @@ locked = Locker.run("fix_stuck_jobs") do
       # Only change it back to ready if it's still assigning.
       OutputMediaFile.update_all({ :worker_id => nil, :state => 'ready' }, { :id => output.id, :state => 'assigning' })
     end
+
+    puts "No stuck files to fix" if stuck_inputs.empty? && stuck_outputs.empty?
   else
     puts "Aborting, Redis queues have a large backlog which could be an indication of network connectivity issues."
   end
