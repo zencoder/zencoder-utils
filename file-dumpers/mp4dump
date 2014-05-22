@@ -2516,7 +2516,10 @@ class AvccSubBox < SubBox
     66 => 'Baseline',
     77 => 'Main',
     88 => 'Extended',
-    100 => 'High'
+    100 => 'High',
+    110 => 'High 10',
+    122 => 'High 4:2:2',
+    144 => 'High 4:4:4'
   }
   COMPAT_FLAGS = {
     128 => 'Baseline',
