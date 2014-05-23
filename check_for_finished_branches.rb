@@ -1,5 +1,10 @@
 #!/usr/bin/env ruby
 
+# Don't try to check anything if we don't have a network connection
+if !system("git fetch 2>&1 > /dev/null")
+  raise "Error performing `git fetch`, check your network or something"
+end
+
 # Get list of latest commit hashes for each branch, in this form:
 #    34bde290ccc48944687c49d61dd7072d906b38bc	refs/heads/feature/resizing-modal
 remote_hashes = `git ls-remote 2>/dev/null | grep -E "refs/heads/(feature|hotfix)/"`
