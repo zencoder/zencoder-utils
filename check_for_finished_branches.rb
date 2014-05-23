@@ -1,30 +1,24 @@
 #!/usr/bin/env ruby
 
-# Get list of latest commit hashes for each branch, in this form:
-#    34bde290ccc48944687c49d61dd7072d906b38bc	refs/heads/feature/resizing-modal
-remote_hashes = `git ls-remote 2>/dev/null | grep -E "refs/heads/(feature|hotfix)/"`
-
-# Convert to an array of pairs: [ ["34bde290ccc48944687c49d61dd7072d906b38bc", "refs/heads/feature/resizing-modal"] ]
-remote_hashes = remote_hashes.split(/\n/).map { |line| line.split(/\s+/).compact }
-
-# Check for finished features (merged to master)
-remote_hashes.each do |hash,branch|
-  next unless branch.to_s.include?('refs/heads/feature')
-
-  # Check for remote branches containing the hash, and see if origin/master is in the mix.
-  merged_to_master = system("git branch --contains #{hash} -r 2>&1 | grep --quiet origin/master")
-
-  puts "Branch #{branch.sub('refs/heads/','')} exists, despite already being merged to master." if merged_to_master
+# Don't try to check anything if we don't have a network connection
+if !system("git fetch 2>&1 > /dev/null")
+  raise "Error performing `git fetch`, check your network or something"
 end
 
-# Check for finished hotfixes (merged to production)
-remote_hashes.each do |hash,branch|
-  next unless branch.to_s.include?('refs/heads/hotfix')
+# Get JUST the branch names
+branches = `git ls-remote 2>/dev/null | grep -o -E "(feature|hotfix|release)/.+"`.split("\n")
 
-  # Check for remote branches containing the hash, and see if origin/master is in the mix.
-  merged_to_production = system("git branch --contains #{hash} -r 2>&1 | grep --quiet origin/production")
+branches_and_authors = {}
 
-  puts "Branch #{branch.sub('refs/heads/','')} exists, despite already being merged to production." if merged_to_production
+# Get all the branches (and their author) that have commits that aren't in
+# master and aren't merge commits.
+branches.each do |b|
+  author = `git log -1 --no-merges origin/#{b} ^master | grep '^Author'`
+  branches_and_authors[b] = author unless author.empty?
 end
 
+padding = branches_and_authors.keys.map(&:size).max
 
+branches_and_authors.each do |branch, author|
+  puts "Branch: #{branch.sub('refs/heads/','').ljust(padding, " ")} -- #{author}"
+end
