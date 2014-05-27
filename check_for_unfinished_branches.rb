@@ -13,7 +13,7 @@ branches_and_authors = {}
 # Get all the branches (and their author) that have commits that aren't in
 # master and aren't merge commits.
 branches.each do |b|
-  author = `git log -1 --no-merges origin/#{b} ^master | grep '^Author'`
+  author = `git log -1 --no-merges origin/#{b} ^origin/master | grep '^Author'`
   branches_and_authors[b] = author unless author.empty?
 end
 
