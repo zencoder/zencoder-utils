@@ -619,9 +619,9 @@ class MdhdBox < Box
       @duration = stream.ui32
     end
 
-    # Supposedly this is how to decode the language info.
+    # Language is coded with 5 bits per char: [0 11111 11111 11111], and each char is an offset from 0x60
     language_bits = stream.ui16
-    @language = [10,5,0].map { |s| (language_bits >> s) & 0x1f + 0x60 }.pack('c3')
+    @language = [10,5,0].map { |s| ((language_bits >> s) & 0x1f) + 0x60 }.pack('c3')
   end
 
   def print_extra_info(prefix = '')
@@ -632,6 +632,10 @@ class MdhdBox < Box
       cputs "Duration: #{@duration} (#{sprintf('%0.3f',@duration.to_f / @timescale)} seconds)", :dark_gray
     else
       cputs "Duration: #{@duration}", :dark_gray
+    end
+    if @language != 'und'
+      print prefix
+      cputs "Language: #{@language}", :dark_gray
     end
   end
 end
