@@ -2084,41 +2084,41 @@ class EsdsSubBox < SubBox
 
   MPEG4_VISUAL_COLOR_PRIMARIES = {
     0 => "Forbidden",
-    1 => "ITU-R Recommendation BT.709",
+    1 => "BT.709",
     2 => "Unspecified Video",
     3 => "Reserved",
-    4 => "ITU-R Recommendation BT.470-2 System M",
-    5 => "ITU-R Recommendation BT.470-2 System B, G (BT.601-6 625)",
-    6 => "SMPTE 170M (BT.601-6 525)",
-    7 => "SMPTE 240M (1987)",
-    8 => "Generic film (colour filters using Illuminant C)"
+    4 => "BT.470 System M",
+    5 => "BT.470 System B and G, BT.601 625",
+    6 => "SMPTE 170M, BT.601 525",
+    7 => "SMPTE 240M",
+    8 => "Generic film"
   }
   MPEG4_VISUAL_COLOR_PRIMARIES.default = "Reserved"
 
   MPEG4_VISUAL_TRANSFER_CHARACTERISTICS = {
     0 => "Forbidden",
-    1 => "ITU-R Recommendation BT.709",
+    1 => "BT.709",
     2 => "Unspecified Video",
     3 => "Reserved",
-    4 => "ITU-R Recommendation BT.470-2 System M",
-    5 => "ITU-R Recommendation BT.470-2 System B, G",
-    6 => "SMPTE 170M (BT.601-6 525, BT.601-6 625)",
-    7 => "SMPTE 240M (1987)",
+    4 => "BT.470 System M",
+    5 => "BT.470 System B and G",
+    6 => "SMPTE 170M, BT.601 525, BT.601 625",
+    7 => "SMPTE 240M",
     8 => "Linear",
-    9 => "Logarithmic (100:1 range)",
-    10 => "Logarithmic (316.22777:1 range)"
+    9 => "Logarithmic (100:1)",
+    10 => "Logarithmic (316.22777:1)"
   }
   MPEG4_VISUAL_TRANSFER_CHARACTERISTICS.default = "Reserved"
 
   MPEG4_VISUAL_MATRIX_COEFFICIENTS = {
     0 => "Forbidden",
-    1 => "ITU-R Recommendation BT.709",
+    1 => "BT.709",
     2 => "Unspecified Video",
     3 => "Reserved",
     4 => "FCC",
-    5 => "ITU-R Recommendation BT.470-2 System B, G (BT.601-6 625)",
-    6 => "SMPTE 170M (BT.601-6 525)",
-    7 => "SMPTE 240M (1987)"
+    5 => "BT.470-2 System B and G, BT.601 625",
+    6 => "SMPTE 170M, BT.601 525",
+    7 => "SMPTE 240M"
   }
   MPEG4_VISUAL_MATRIX_COEFFICIENTS.default = "Reserved"
 
@@ -2633,22 +2633,55 @@ end
 class ColrSubBox < SubBox
   handles 'colr', 'Color Parameters'
 
+  PARAMETER_TYPES = {
+    'nclc' => 'Video',
+    'prof' => 'Print'
+  }
+  PARAMETER_TYPES.default = 'Unknown'
+
+  COLOR_PRIMARIES = {
+    1 => 'BT.709, SMPTE 274M, SMPTE 296M',
+    2 => 'Unknown',
+    5 => "BT.470 System B and G, BT.601 625 (Probably?)",
+    6 => "BT.601 525, SMPT 170M",
+  }
+  COLOR_PRIMARIES.default = 'Reserved'
+
+  TRANSFER_FUNCTIONS = {
+    1 => 'BT.709, SMPTE 274M, SMPTE 296M, SMPTE 293M, SMPTE 170M',
+    2 => 'Unknown',
+    7 => 'SMPTE 240M, SMPTE 274M'
+  }
+  TRANSFER_FUNCTIONS.default = 'Reserved'
+
+  MATRIX_COEFFICIENTS = {
+    1 => 'BT.709 (1125/60/2:1 only), SMPTE 274M, SMPTE 296M',
+    2 => 'Unknown',
+    6 => 'BT.601, BT.470 System B and G, SMPTE 170M, SMPTE 293M',
+    7 => 'SMPTE 240M, SMPTE 274M'
+  }
+  MATRIX_COEFFICIENTS.default = 'Reserved'
+
   def read_header_data(stream)
     @parameter_type = stream.fourcc
-    @primaries = stream.ui16
-    @transfer = stream.ui16
-    @matrix = stream.ui16
+    if @parameter_type == 'nclc'
+      @primaries = stream.ui16
+      @transfer = stream.ui16
+      @matrix = stream.ui16
+    end
   end
 
   def print_extra_info(prefix = '')
     print prefix
-    cputs "Parameter type: #{@parameter_type}", :dark_gray
-    print prefix
-    cputs "Primaries index: #{@primaries}", :dark_gray
-    print prefix
-    cputs "Transfer function index: #{@transfer}", :dark_gray
-    print prefix
-    cputs "Matrix index: #{@matrix}", :dark_gray
+    cputs "Parameter type: #{@parameter_type} (#{PARAMETER_TYPES[@parameter_type]})", :dark_gray
+    if @parameter_type == 'nclc'
+      print prefix
+      cputs "Primaries index: #{@primaries} (#{COLOR_PRIMARIES[@primaries]})", :dark_gray
+      print prefix
+      cputs "Transfer function index: #{@transfer} (#{TRANSFER_FUNCTIONS[@transfer]})", :dark_gray
+      print prefix
+      cputs "Matrix index: #{@matrix} (#{MATRIX_COEFFICIENTS[@matrix]})", :dark_gray
+    end
   end
 end
 
