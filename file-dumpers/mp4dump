@@ -1890,6 +1890,13 @@ class Mp4vSubBox < SubBoxWithSubBoxes
 
   handles 'encv', 'Encrypted Video Description'
 
+  SPECIAL_BIT_DEPTH_NAMES = {
+    33 => "Black and White",
+    34 => "4-Level Grayscale (2 bit)",
+    36 => "16-Level Grayscale (4 bit)",
+    40 => "256-Level Grayscale (8 bit)"
+  }
+
   attr_accessor :width, :height, :frame_count, :depth
 
   def read_header_data(stream)
@@ -1897,20 +1904,21 @@ class Mp4vSubBox < SubBoxWithSubBoxes
     reserved2 = @data_stream.si16
     data_ref_index = @data_stream.si16
 
-    always0 = @data_stream.ui16
-    reserved3 = @data_stream.ui16
-    always0 = @data_stream.ui32
-    always0 = @data_stream.ui32
-    always0 = @data_stream.ui32
+    always0 = @data_stream.ui16    # Quicktime Video Encoding Version
+    reserved3 = @data_stream.ui16  # Quicktime Video Encoding Revision Level
+    always0 = @data_stream.ui32    # Quicktime Video Encoding Vendor
+    always0 = @data_stream.ui32    # Quicktime Video Temporal Quality
+    always0 = @data_stream.ui32    # Quicktime Video Spatial Quality
     @width = @data_stream.ui16
     @height = @data_stream.ui16
     horizontal_ppi = @data_stream.fixed32
     vertical_ppi = @data_stream.fixed32
-    reserved4 = @data_stream.ui32
-    @frame_count = @data_stream.ui16 # Frames per sample
+    reserved4 = @data_stream.ui32           # Quicktime Video Data Size
+    @frame_count = @data_stream.ui16        # Frames per sample
     compressor_name = @data_stream.read(32)
     @depth = @data_stream.ui16
-    alwaysMinus1 = @data_stream.si16
+    alwaysMinus1 = @data_stream.si16        # Quicktime video color table ID (-1 if no table)
+    # Could be trailing color table data here, if color table ID is zero.
   end
 
   def print_extra_info(prefix = '')
@@ -1922,7 +1930,8 @@ class Mp4vSubBox < SubBoxWithSubBoxes
       print prefix
       cputs "Frame Count: #{@frame_count}", :dark_gray
       print prefix
-      cputs "Depth: #{@depth}", :dark_gray
+      bit_depth_name = " (#{SPECIAL_BIT_DEPTH_NAMES[@depth]})" if SPECIAL_BIT_DEPTH_NAMES[@depth]
+      cputs "Depth: #{@depth}#{bit_depth_name}", :dark_gray
     end
   end
 end
@@ -2058,11 +2067,72 @@ class EsdsSubBox < SubBox
     7 => "8 channels - C, L, R side_L, side_R, rear_L, rear_R, LFE"
   }
 
+  MPEG4_VISUAL_VIDEO_FORMATS = {
+    0 => "Component",
+    1 => "PAL",
+    2 => "NTSC",
+    3 => "SECAM",
+    4 => "MAC",
+    5 => "Unspecified video format"
+  }
+  MPEG4_VISUAL_VIDEO_FORMATS.default = "Reserved"
+
+  MPEG4_VISUAL_VIDEO_RANGES = {
+    0 => "Studio",
+    1 => "Full"
+  }
+
+  MPEG4_VISUAL_COLOR_PRIMARIES = {
+    0 => "Forbidden",
+    1 => "ITU-R Recommendation BT.709",
+    2 => "Unspecified Video",
+    3 => "Reserved",
+    4 => "ITU-R Recommendation BT.470-2 System M",
+    5 => "ITU-R Recommendation BT.470-2 System B, G (BT.601-6 625)",
+    6 => "SMPTE 170M (BT.601-6 525)",
+    7 => "SMPTE 240M (1987)",
+    8 => "Generic film (colour filters using Illuminant C)"
+  }
+  MPEG4_VISUAL_COLOR_PRIMARIES.default = "Reserved"
+
+  MPEG4_VISUAL_TRANSFER_CHARACTERISTICS = {
+    0 => "Forbidden",
+    1 => "ITU-R Recommendation BT.709",
+    2 => "Unspecified Video",
+    3 => "Reserved",
+    4 => "ITU-R Recommendation BT.470-2 System M",
+    5 => "ITU-R Recommendation BT.470-2 System B, G",
+    6 => "SMPTE 170M (BT.601-6 525, BT.601-6 625)",
+    7 => "SMPTE 240M (1987)",
+    8 => "Linear",
+    9 => "Logarithmic (100:1 range)",
+    10 => "Logarithmic (316.22777:1 range)"
+  }
+  MPEG4_VISUAL_TRANSFER_CHARACTERISTICS.default = "Reserved"
+
+  MPEG4_VISUAL_MATRIX_COEFFICIENTS = {
+    0 => "Forbidden",
+    1 => "ITU-R Recommendation BT.709",
+    2 => "Unspecified Video",
+    3 => "Reserved",
+    4 => "FCC",
+    5 => "ITU-R Recommendation BT.470-2 System B, G (BT.601-6 625)",
+    6 => "SMPTE 170M (BT.601-6 525)",
+    7 => "SMPTE 240M (1987)"
+  }
+  MPEG4_VISUAL_MATRIX_COEFFICIENTS.default = "Reserved"
+
   def read_data(stream)
     super
     return unless @data
 
     @core_coder_delay = nil
+    @audio_object_type = nil
+    @video_format = nil
+    @video_range = nil
+    @color_primaries = nil
+    @transfer_characteristics = nil
+    @matrix_coefficients = nil
 
     version = @data_stream.ui8
     flags = @data_stream.ui24
@@ -2100,10 +2170,24 @@ class EsdsSubBox < SubBox
         print prefix
         cputs "  Core Coder Delay: #{@core_coder_delay}", :dark_gray
       end
-      
-
     end
-    
+
+    if @video_format
+      print prefix
+      cputs "Decoder Config: ", :dark_gray
+      print prefix
+      cputs "  Video Format: #{@video_format} - #{MPEG4_VISUAL_VIDEO_FORMATS[@video_format]}", :dark_gray
+      print prefix
+      cputs "  Video Range: #{@video_range} - #{MPEG4_VISUAL_VIDEO_RANGES[@video_range]}", :dark_gray
+      if @color_primaries
+        print prefix
+        cputs "  Color primaries: #{@color_primaries} - #{MPEG4_VISUAL_COLOR_PRIMARIES[@color_primaries]}", :dark_gray
+        print prefix
+        cputs "  Transfer characteristics: #{@transfer_characteristics} - #{MPEG4_VISUAL_TRANSFER_CHARACTERISTICS[@transfer_characteristics]}", :dark_gray
+        print prefix
+        cputs "  Matrix coefficients: #{@matrix_coefficients} - #{MPEG4_VISUAL_MATRIX_COEFFICIENTS[@matrix_coefficients]}", :dark_gray
+      end
+    end
   end
 
   # Tag kinds (from http://www.protocols.com/pbook/audiov.htm ):
@@ -2179,6 +2263,11 @@ class EsdsSubBox < SubBox
           decode_asc(@dec_specific_info)
         end
 
+        # Try decoding if it looks like mpeg-4 visual VideoObjectSequence
+        if len >= 9 && @object_type == 32
+          decode_mpeg4v_video_object_sequence(@dec_specific_info)
+        end
+
       when 6 # sl_config_descr_tag -- sync layer config descriptor...  blah.
         @data_stream.read(len)
       else # who knows
@@ -2198,6 +2287,56 @@ class EsdsSubBox < SubBox
     return length
   rescue
     0
+  end
+
+  def decode_mpeg4v_video_object_sequence(data)
+    vos = Bitstream.new(data)
+    while vos.remaining_bits >= 32
+      start_code = vos.getbits(32) & 0xff
+      break unless start_code == 0xB0 # If it's not a start code, the rest won't be valid.
+      profile_and_level = vos.getbits(8)
+
+      # User data
+      while vos.nextbits(32) == 0x1B2
+        vos.skipbits(32) # the start code
+        while vos.nextbits(24) != 1 && vos.remaining_bits > 8
+          vos.skipbits(8) # Throw away this user data, since we don't need to decode it.
+        end
+      end
+
+      # VisualObject
+      object_code = vos.getbits(32)
+      is_visual_object_id = vos.getbits(1)
+      if is_visual_object_id == 1
+        vos.skipbits(4) # object_version_id
+        vos.skipbits(3) # object_priority
+      end
+      visual_object_type = vos.getbits(4)
+
+      # 1 = video ID, 2 = still texture ID
+      if visual_object_type == 1 || visual_object_type == 2
+        video_signal_type = vos.getbits(1)
+        if video_signal_type == 1
+          @video_format = vos.getbits(3)
+          @video_range = vos.getbits(1)
+          color_desc = vos.getbits(1)
+          if color_desc == 1
+            @color_primaries = vos.getbits(8)
+            @transfer_characteristics = vos.getbits(8)
+            @matrix_coefficients = vos.getbits(8)
+          end
+        end
+      end
+
+      # None of the other visual object types matter at this point!
+
+      # This is probably not accurate!!!  But I don't want to implement all the other data decoding,
+      # so just see if we can find the next end code?
+      while vos.nextbits(24) != 1 && vos.remaining_bits > 8
+        vos.skipbits(8)
+      end
+    end
+
   end
 
   def decode_asc(data)

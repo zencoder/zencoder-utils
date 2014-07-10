@@ -175,7 +175,7 @@ class Bitstream
   end
 
   def nextbits(count)
-    raise "nextbits of more than 16 not implemented" if count > 16
+    raise "nextbits of more than 32 not implemented" if count > 32
     getbits_internal(count, false)
   end
 
@@ -183,22 +183,29 @@ class Bitstream
   # subsequent calls will get following bits.
   def getbits(count)
     value = 0
-    while count > 16
-      value += getbits_internal(16)
-      count -= 16
-      value = value << [count,16].min
+    while count > 32
+      value += getbits_internal(32)
+      count -= 32
+      value = value << [count,32].min
     end
     value += getbits_internal(count)
   end
 
-  # Do getbits, with up to 16 bits.
+  # Do getbits, with up to 32 bits.
   def getbits_internal(count, increment_position = true)
-    return 0 if count > 16 || count < 1
+    return 0 if count > 32 || count < 1 || remaining_bits < count
     byte = @bit_offset / 8
     bit  = @bit_offset % 8
-    val = (@data[@pos + byte].to_i << 16) + (@data[@pos + byte + 1].to_i << 8) + @data[@pos + byte + 2].to_i
-    val = (val << bit) & 16777215
-    val = val >> (24 - count)
+
+    val = @data[@pos + byte].to_i
+    bits_added = (8 - bit)
+    while bits_added < count
+      byte += 1
+      val = (val << 8) + @data[@pos + byte].to_i
+      bits_added += 8
+    end
+    val = val >> (bits_added - count)
+    val = val & ((1 << count) - 1)
 
     @bit_offset += count if increment_position
     return val
@@ -210,7 +217,7 @@ class Bitstream
 
   def append(data_string)
     @data += data_string.bytes.to_a
-    @total_bits += data_string.length
+    @total_bits += (data_string.length * 8)
   end
 
   # Remove any data that we've moved past already, so we don't build up too much in memory.
