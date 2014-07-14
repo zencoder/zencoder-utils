@@ -3,20 +3,39 @@
     <title>Codec Quality Comparison</title>
     <script src="js/jquery-2.1.1.min.js"></script>
     <script src="js/d3/d3.min.js"></script>
-    <script src="js/epoch.0.5.2/epoch.0.5.2.min.js"></script>
+    <script src="js/rickshaw.min.js"></script>
     <script src="js/app.js"></script>
-    <link rel="stylesheet" type="text/css" href="js/epoch.0.5.2/epoch.0.5.2.min.css">
+    <link rel="stylesheet" type="text/css" href="css/rickshaw.css">
   </head>
   <body>
     <h1>Codec Quality Comparison</h1>
-    <div id="area" class="epoch category10" style="height: 200px;"></div>
+    <div id="area"></div>
+    <div id="timeline"></div>
+    <div id="legend"></div>
     <script>
       $(function() {
+        var points = [];
+        for (i = 0; i < 1800; i++) {
+         points.push({x: i, y: (Math.random() * 20) + 30})
+        }
         var data = [
-          { label: 'Layer 1', values: [ {x: 0, y: 0}, {x: 1, y: 1}, {x: 2, y: 2} ] },
-          { label: 'Layer 2', values: [ {x: 0, y: 0}, {x: 1, y: 1}, {x: 2, y: 4} ] }
+          {
+           color: 'red',
+           data: points,
+           name: 'PSNR'
+          },
+          {
+           color: 'green',
+           data: $.map(points, function(p) {
+             return {x: p.x, y: (p.y / 2.0) * Math.random()}
+           }),
+           name: 'SSIM'
+          },
         ];
-        drawChart(data);
+        var keyframes = [
+          1, 240, 421, 814, 1248, 1342
+        ];
+        drawChart(data, keyframes);
       });
     </script>
   </body>
