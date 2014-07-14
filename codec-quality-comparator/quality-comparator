@@ -1,0 +1,43 @@
+#!/usr/bin/env ruby
+
+require 'erb'
+require 'json'
+
+class Template
+  COUNT = 180
+  def psnr_data
+    data = []
+    1.upto(COUNT) do |x|
+      data << {:x => x, :y => rand}
+    end
+    data
+  end
+
+  def ssim_data
+    data = []
+    1.upto(COUNT) do |x|
+      data << {:x => x, :y => rand*2}
+    end
+    data
+  end
+
+  def render
+    @psnr_data = JSON.dump(psnr_data)
+    @ssim_data = JSON.dump(ssim_data)
+    @keyframes = JSON.dump [
+      1, 24, 58, 124, 311, 430, 791, 872
+    ]
+
+  end
+
+  def get_binding
+    binding
+  end
+end
+
+renderer = Template.new
+renderer.render
+template_obj = ERB.new(File.new('views/index.html', 'r').read)
+
+puts template_obj.result(renderer.get_binding)
+

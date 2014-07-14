@@ -14,28 +14,19 @@
     <div id="legend"></div>
     <script>
       $(function() {
-        var points = [];
-        for (i = 0; i < 1800; i++) {
-         points.push({x: i, y: (Math.random() * 20) + 30})
-        }
         var data = [
           {
            color: 'red',
-           data: points,
+           data: <%= @psnr_data %>,
            name: 'PSNR'
           },
           {
            color: 'green',
-           data: $.map(points, function(p) {
-             return {x: p.x, y: (p.y / 2.0) * Math.random()}
-           }),
+           data: <%= @ssim_data %>,
            name: 'SSIM'
           },
         ];
-        var keyframes = [
-          1, 240, 421, 814, 1248, 1342
-        ];
-        drawChart(data, keyframes);
+        drawChart(data, <%= @keyframes %>);
       });
     </script>
   </body>
