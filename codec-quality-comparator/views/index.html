@@ -10,5 +10,14 @@
   <body>
     <h1>Codec Quality Comparison</h1>
     <div id="area" class="epoch category10" style="height: 200px;"></div>
+    <script>
+      $(function() {
+        var data = [
+          { label: 'Layer 1', values: [ {x: 0, y: 0}, {x: 1, y: 1}, {x: 2, y: 2} ] },
+          { label: 'Layer 2', values: [ {x: 0, y: 0}, {x: 1, y: 1}, {x: 2, y: 4} ] }
+        ];
+        drawChart(data);
+      });
+    </script>
   </body>
 </html>
