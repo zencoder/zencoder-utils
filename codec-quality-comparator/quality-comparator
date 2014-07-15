@@ -14,11 +14,23 @@ def keyframes_for_file(file)
   get_keyframes(data.split)
 end
 
+def run_comparison(reference, degraded)
+  rd, wr = IO.pipe
+  pid = Process.spawn("./compare_444p_psnr #{reference} #{degraded}", :out => wr, :close_others => true)
+  wr.close
+
+  data = rd.read
+  Process.waitpid pid
+
+  data
+end
+
 def run_commands(file, output)
   ref_rd, ref_wr = IO.pipe
-  decode_pid = Process.spawn("ffmpeg -i #{file} -pix_fmt yuv444p -f yuv4mpegpipe -", :out => ref_wr, :close_others => true)
+  decode_pid = Process.spawn("ffmpeg -i #{file} -pix_fmt yuv444p -f yuv4mpegpipe -", :out => ref_wr, :err => "/dev/null", :close_others => true)
   ref_wr.close
 
+  # FIXME this is stupid
   cat_pid = Process.spawn("cat", :in => ref_rd, :out => output, :close_others => true)
   ref_rd.close
 
@@ -38,12 +50,53 @@ def get_keyframes(debug_output)
       end
     end
   end
-  puts keyframes
   keyframes
 end
 
+def parse_data(data)
+  # like:
+  # Frame 0 PSNR (5ms): luma = inf, chroma_cb = inf, chroma_cr = inf
+  # Frame 0 SSIM (514ms): luma = 1.00000, chroma_cb = 1.00000, chroma_cr = 1.00000
+  # Frame 0 MS-SSIM (5233ms): luma = 1.00000, chroma_cb = 1.00000, chroma_cr = 1.00000
+  #
+  parsed_data = {
+    :psnr => [],
+    :ssim => [],
+    :ms_ssim => []
+  }
+  data.each do |line|
+    value = line.split(", ")[0].split(": ")[-1].split(" = ")[-1].to_f rescue 0
+    if line.include?("PSNR")
+      parsed_data[:psnr] << value
+    elsif line.include?("SSIM")
+      if line.include?("MS-SSIM")
+        parsed_data[:ms_ssim] << value
+      else
+        parsed_data[:ssim] << value
+      end
+    end
+  end
+  parsed_data
+end
+
 class Template
-  COUNT = 180
+  COUNT = 1000
+
+  def initialize(filename, psnr, ssim, keyframes)
+    @psnr_data = JSON.dump(format_data(psnr))
+    @ssim_data = JSON.dump(format_data(ssim))
+    @keyframes = JSON.dump keyframes
+    @filename = filename
+  end
+
+  def format_data(data)
+    vals = []
+    data.each_with_index do |p, i|
+      vals << {x: i, y: p}
+    end
+    vals
+  end
+
   def psnr_data
     data = []
     1.upto(COUNT) do |x|
@@ -60,29 +113,22 @@ class Template
     data
   end
 
-  def render
-    @psnr_data = JSON.dump(psnr_data)
-    @ssim_data = JSON.dump(ssim_data)
-    @keyframes = JSON.dump [
-      1, 24, 58, 124, 311, 430, 791, 872
-    ]
-  end
-
   def get_binding
     binding
   end
 end
 
-renderer = Template.new
-renderer.render
-template_obj = ERB.new(File.new('views/index.html', 'r').read)
-
-puts template_obj.result(renderer.get_binding)
-
 reference = ARGV[0]
 input = ARGV[1]
 
-keyframes_for_file(reference)
-run_commands(reference, "reference.dat")
-run_commands(input, "input.dat")
+keyframes = keyframes_for_file(input)
+run_commands(reference, "/tmp/reference.dat")
+run_commands(input, "/tmp/input.dat")
 
+raw_data = run_comparison("/tmp/reference.dat", "/tmp/input.dat").split("\n")
+data = parse_data(raw_data)
+
+renderer = Template.new(input, data[:psnr], data[:ssim], keyframes)
+template_obj = ERB.new(File.new('views/index.html', 'r').read)
+
+puts template_obj.result(renderer.get_binding)
