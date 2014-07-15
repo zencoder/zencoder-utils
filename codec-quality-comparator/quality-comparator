@@ -3,9 +3,20 @@
 require 'erb'
 require 'json'
 
+def keyframes_for_file(file)
+  ref_rd, ref_wr = IO.pipe
+  pid = Process.spawn("ffmpeg -loglevel debug -dump -i #{file} -f yuv4mpegpipe - ", :out => "/dev/null", :err => ref_wr, :close_others => true)
+  ref_wr.close
+
+  data = ref_rd.read
+  Process.waitpid pid
+
+  get_keyframes(data.split)
+end
+
 def run_commands(file, output)
   ref_rd, ref_wr = IO.pipe
-  decode_pid = Process.spawn("ffmpeg -i #{file} -stats -pix_fmt yuv444p -f yuv4mpegpipe -", :out => ref_wr, :close_others => true)
+  decode_pid = Process.spawn("ffmpeg -i #{file} -pix_fmt yuv444p -f yuv4mpegpipe -", :out => ref_wr, :close_others => true)
   ref_wr.close
 
   cat_pid = Process.spawn("cat", :in => ref_rd, :out => output, :close_others => true)
@@ -13,6 +24,22 @@ def run_commands(file, output)
 
   Process.waitpid decode_pid
   Process.waitpid cat_pid
+end
+
+def get_keyframes(debug_output)
+  frame = 0
+  keyframes = []
+  debug_output.each do |line|
+    line = line.strip
+    if line.start_with?("keyframe")
+      frame += 1
+      if line.split("=")[-1].to_i == 1
+        keyframes << frame
+      end
+    end
+  end
+  puts keyframes
+  keyframes
 end
 
 class Template
@@ -39,7 +66,6 @@ class Template
     @keyframes = JSON.dump [
       1, 24, 58, 124, 311, 430, 791, 872
     ]
-
   end
 
   def get_binding
@@ -56,6 +82,7 @@ puts template_obj.result(renderer.get_binding)
 reference = ARGV[0]
 input = ARGV[1]
 
+keyframes_for_file(reference)
 run_commands(reference, "reference.dat")
 run_commands(input, "input.dat")
 
