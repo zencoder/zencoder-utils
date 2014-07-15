@@ -3,6 +3,18 @@
 require 'erb'
 require 'json'
 
+def run_commands(file, output)
+  ref_rd, ref_wr = IO.pipe
+  decode_pid = Process.spawn("ffmpeg -i #{file} -stats -pix_fmt yuv444p -f yuv4mpegpipe -", :out => ref_wr, :close_others => true)
+  ref_wr.close
+
+  cat_pid = Process.spawn("cat", :in => ref_rd, :out => output, :close_others => true)
+  ref_rd.close
+
+  Process.waitpid decode_pid
+  Process.waitpid cat_pid
+end
+
 class Template
   COUNT = 180
   def psnr_data
@@ -40,4 +52,10 @@ renderer.render
 template_obj = ERB.new(File.new('views/index.html', 'r').read)
 
 puts template_obj.result(renderer.get_binding)
+
+reference = ARGV[0]
+input = ARGV[1]
+
+run_commands(reference, "reference.dat")
+run_commands(input, "input.dat")
 
