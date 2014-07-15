@@ -229,7 +229,7 @@ int main(int argc,char* argv[]){
     error_exit("Out of memory getting degraded frame buffer!");
   }
 
-  while (valid_stream && !feof(reference_file)) {
+  while (valid_stream && !feof(reference_file) && frame_number < 50) {
     // Read the frame header.
     if (fgets(buf, HEADER_BUFFER_SIZE, reference_file) != NULL) {
       // printf("Frame header line: %s", buf);

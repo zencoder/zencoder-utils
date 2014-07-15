@@ -9,12 +9,12 @@ INCLUDES = -Iiqa/include
 CC = gcc
 
 # Release flags
-# CFLAGS=-O2 -Wall
+CFLAGS=-O2 -Wall
 
 # Debug Flags
-CFLAGS=-g -Wall
+# CFLAGS=-g -Wall
 
-LIBS=iqa/build/debug/libiqa.a -lm -lrt
+LIBS=iqa/build/debug/libiqa.a -lm -lrt -lprofiler
 LFLAGS=-L.
 
 OUT = compare_444p_psnr

@@ -33,6 +33,7 @@
 
 #include "convolve.h"
 #include <stdlib.h>
+#include <stdio.h>
 
 float KBND_SYMMETRIC(const float *img, int w, int h, int x, int y, float bnd_const)
 {
@@ -90,6 +91,11 @@ void _iqa_convolve(float *img, int w, int h, const struct _kernel *k, float *res
     int img_offset,k_offset;
     double sum;
     float scale, *dst=result;
+    float *kernel_offset_pointer;
+    float *image_offset_pointer;
+    float *loop_pointer;
+    float *ending_pointer;
+    int v_end;
 
     if (!dst)
         dst = img; /* Convolve in-place */
@@ -101,13 +107,24 @@ void _iqa_convolve(float *img, int w, int h, const struct _kernel *k, float *res
         for (x=0; x < dst_w; ++x) {
             sum = 0.0;
             k_offset = 0;
+            kernel_offset_pointer = k->kernel;
             ky = y+vc;
             kx = x+uc;
-            for (v=-vc; v <= vc-kh_even; ++v) {
-                img_offset = (ky+v)*w + kx;
-                for (u=-uc; u <= uc-kw_even; ++u, ++k_offset) {
-                    sum += img[img_offset+u] * k->kernel[k_offset];
+            // img_offset = (ky-vc)*w + kx;
+            image_offset_pointer = img + (ky-vc)*w + kx - uc;
+            ending_pointer = image_offset_pointer + (uc - kw_even + uc);
+            v_end = vc-kh_even;
+            for (v=-vc; v <= v_end; ++v) {
+                // img_offset = (ky+v)*w + kx;
+                // for (u=-uc; u <= uc-kw_even; ++u, ++k_offset) {
+                //     sum += img[img_offset+u] * k->kernel[k_offset];
+                // }
+                for (loop_pointer = image_offset_pointer; loop_pointer <= ending_pointer; ++loop_pointer, ++kernel_offset_pointer) {
+                    sum += (*loop_pointer) * (*kernel_offset_pointer);
                 }
+
+                image_offset_pointer += w;
+                ending_pointer += w;
             }
             dst[y*dst_w + x] = (float)(sum * scale);
         }
