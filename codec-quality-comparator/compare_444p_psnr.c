@@ -7,6 +7,9 @@
 #include <unistd.h>
 #include <pthread.h>
 
+#define DO_MS_SSIM 1
+#define THREAD_COUNT 8
+
 int DEBUG = 0;
 #define DEBUG1(fmt, ...) if (DEBUG >= 1) { printf("DEBUG1: "); printf(fmt, ##__VA_ARGS__); printf("\n"); }
 #define DEBUG2(fmt, ...) if (DEBUG >= 2) { printf("DEBUG2: "); printf(fmt, ##__VA_ARGS__); printf("\n"); }
@@ -30,7 +33,6 @@ struct frameinfo {
   float ms_ssim_results[4];
 };
 
-#define THREAD_COUNT 8
 pthread_t threads[THREAD_COUNT];
 struct frameinfo frames_info[THREAD_COUNT];
 
@@ -98,17 +100,19 @@ void* analyze_frame_pair(void* thread_data) {
   frame->ssim_results[2] = chroma_cr_result;
   frame->ssim_results[3] = after-before;
 
-  ref_plane_buf = frame->reference_frame_buffer;
-  deg_plane_buf = frame->degraded_frame_buffer;
-  before = get_current_time();
-  luma_result =      iqa_ms_ssim(ref_plane_buf, deg_plane_buf, width, height, width, 0);
-  ref_plane_buf += (width*height);
-  deg_plane_buf += (width*height);
-  chroma_cb_result = iqa_ms_ssim(ref_plane_buf, deg_plane_buf, width, height, width, 0);
-  ref_plane_buf += (width*height);
-  deg_plane_buf += (width*height);
-  chroma_cr_result = iqa_ms_ssim(ref_plane_buf, deg_plane_buf, width, height, width, 0);
-  after = get_current_time();
+  if (DO_MS_SSIM) {
+    ref_plane_buf = frame->reference_frame_buffer;
+    deg_plane_buf = frame->degraded_frame_buffer;
+    before = get_current_time();
+    luma_result =      iqa_ms_ssim(ref_plane_buf, deg_plane_buf, width, height, width, 0);
+    ref_plane_buf += (width*height);
+    deg_plane_buf += (width*height);
+    chroma_cb_result = iqa_ms_ssim(ref_plane_buf, deg_plane_buf, width, height, width, 0);
+    ref_plane_buf += (width*height);
+    deg_plane_buf += (width*height);
+    chroma_cr_result = iqa_ms_ssim(ref_plane_buf, deg_plane_buf, width, height, width, 0);
+    after = get_current_time();
+  }
 
   frame->ms_ssim_results[0] = luma_result;
   frame->ms_ssim_results[1] = chroma_cb_result;
@@ -300,7 +304,7 @@ int main(int argc,char* argv[]){
   int valid_stream = 1;
   int thread_number = 0;
 
-  while (valid_stream && !feof(reference_file) && !feof(degraded_file) && frame_count < 50) {
+  while (valid_stream && !feof(reference_file) && !feof(degraded_file)) {   // && frame_count < 50) {
     if (frames_info[thread_number].active == 1) {
       usleep(100);
     } else {
@@ -308,6 +312,7 @@ int main(int argc,char* argv[]){
       result_code = read_frame_pair(reference_file, degraded_file, &frames_info[thread_number]);
       if (result_code == 0) {
         valid_stream = 0;
+        break;
       } else {
         result_code = pthread_create(&threads[thread_number], &attr, analyze_frame_pair, &frames_info[thread_number]);
         if (result_code) {
@@ -321,6 +326,8 @@ int main(int argc,char* argv[]){
   }
 
   all_frames_read = 1;
+
+  // printf("Finished reading frames!\n");
 
   pthread_exit(NULL);
   return 0;

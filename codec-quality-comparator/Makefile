@@ -14,7 +14,8 @@ CFLAGS=-O3 -Wall
 # Debug Flags
 # CFLAGS=-g -Wall
 
-LIBS=iqa/build/debug/libiqa.a -lm -lrt -lprofiler
+# LIBS=iqa/build/debug/libiqa.a -lm -lrt -lprofiler
+LIBS=iqa/build/debug/libiqa.a -lm -lrt
 LFLAGS=-L.
 
 OUT = compare_444p_psnr
