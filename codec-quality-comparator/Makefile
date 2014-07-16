@@ -9,7 +9,7 @@ INCLUDES = -Iiqa/include
 CC = gcc
 
 # Release flags
-CFLAGS=-O2 -Wall
+CFLAGS=-O3 -Wall
 
 # Debug Flags
 # CFLAGS=-g -Wall

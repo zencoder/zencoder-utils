@@ -18,7 +18,7 @@ OUTDIR=./build/release
 CFLAGS=-O2 -Wall
 else
 OUTDIR=./build/debug
-CFLAGS=-g -Wall
+CFLAGS=-g -O3 -Wall
 endif
 
 OUT = $(OUTDIR)/libiqa.a
