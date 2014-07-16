@@ -3,55 +3,114 @@
 require 'erb'
 require 'json'
 
-def keyframes_for_file(file)
-  ref_rd, ref_wr = IO.pipe
-  pid = Process.spawn("ffmpeg -loglevel debug -dump -i #{file} -f yuv4mpegpipe - ", :out => "/dev/null", :err => ref_wr, :close_others => true)
-  ref_wr.close
-
-  data = ref_rd.read
-  Process.waitpid pid
-
-  get_keyframes(data.split)
+def escape_for_single_quotes(filename)
+  filename.gsub("'","'\\\\''")
 end
 
-def run_comparison(reference, degraded)
-  rd, wr = IO.pipe
-  pid = Process.spawn("./compare_444p_psnr #{reference} #{degraded}", :out => wr, :close_others => true)
-  wr.close
-
-  data = rd.read
-  Process.waitpid pid
-
-  data
+def single_quote(filename)
+  "'" + escape_for_single_quotes(filename) + "'"
 end
 
-def run_commands(file, output)
-  ref_rd, ref_wr = IO.pipe
-  decode_pid = Process.spawn("ffmpeg -i #{file} -pix_fmt yuv444p -f yuv4mpegpipe -", :out => ref_wr, :err => "/dev/null", :close_others => true)
-  ref_wr.close
-
-  # FIXME this is stupid
-  cat_pid = Process.spawn("cat", :in => ref_rd, :out => output, :close_others => true)
-  ref_rd.close
-
-  Process.waitpid decode_pid
-  Process.waitpid cat_pid
-end
-
-def get_keyframes(debug_output)
-  frame = 0
-  keyframes = []
-  debug_output.each do |line|
-    line = line.strip
-    if line.start_with?("keyframe")
-      frame += 1
-      if line.split("=")[-1].to_i == 1
-        keyframes << frame
-      end
-    end
+def get_file_info(file)
+  return @stored_info if file == @stored_info_filename
+  file_info = `ffmpeg -i #{single_quote(file)} 2>&1`
+  if file_info =~ /Stream \#0:([0-9]+).*Video:/
+    video_stream_id = $1
+  else
+    puts "Video stream ID couldn't be determined - keyframes and bitrate disabled."
+    video_stream_id = nil
   end
+
+  if video_stream_id
+    @stored_info = `ffmpeg -loglevel debug -dump -i #{single_quote(file)} -f yuv4mpegpipe -y /dev/null 2>&1 | grep -A 4 "stream ##{video_stream_id}:"`.split(/\nstream/)
+  else
+    @stored_info = []
+  end
+
+  @stored_info_filename = file
+  @stored_info
+end
+
+def keyframes_for_file(file)
+  keyframes = []
+
+  get_file_info(file).each_with_index do |data, frame_number|
+    keyframes << frame_number if data =~ /keyframe=1/
+  end
+
   keyframes
 end
+
+def frame_sizes_for_file(file)
+  get_file_info(file).map { |data| data =~ /size=([0-9]+)/ ? $1.to_i : 0 }
+end
+
+def mkfifo(filename)
+  `mkfifo #{single_quote(filename)} 2>/dev/null`
+end
+
+def run_comparison(reference_file, degraded_file)
+  ref_fifo = "/tmp/ref.fifo.y4m"
+  mkfifo(ref_fifo)
+  ref_decode_pid = Process.spawn("ffmpeg -i #{single_quote(reference_file)} -pix_fmt yuv444p -f yuv4mpegpipe -y #{single_quote(ref_fifo)}", :err => "/dev/null", :close_others => true)
+
+  deg_fifo = "/tmp/deg.fifo.y4m"
+  mkfifo(deg_fifo)
+  deg_decode_pid = Process.spawn("ffmpeg -i #{single_quote(degraded_file)} -pix_fmt yuv444p -f yuv4mpegpipe -y #{single_quote(deg_fifo)}", :err => "/dev/null", :close_others => true)
+
+  result_read, result_write = IO.pipe
+  compare_pid = Process.spawn("./compare_444p_psnr #{single_quote(ref_fifo)} #{single_quote(deg_fifo)}", :out => result_write, :close_others => true)
+  result_write.close
+
+  result_data = result_read.read
+  result_read.close
+
+  Process.waitpid(ref_decode_pid)
+  Process.waitpid(deg_decode_pid)
+  Process.waitpid(compare_pid)
+
+  result_data
+end
+
+# def run_comparison(reference, degraded)
+#   rd, wr = IO.pipe
+#   pid = Process.spawn("./compare_444p_psnr #{reference} #{degraded}", :out => wr, :close_others => true)
+#   wr.close
+#
+#   data = rd.read
+#   Process.waitpid pid
+#
+#   data
+# end
+
+# def run_commands(file, output)
+#   ref_rd, ref_wr = IO.pipe
+#   decode_pid = Process.spawn("ffmpeg -i #{file} -pix_fmt yuv444p -f yuv4mpegpipe -", :out => ref_wr, :err => "/dev/null", :close_others => true)
+#   ref_wr.close
+#
+#   # FIXME this is stupid
+#   cat_pid = Process.spawn("cat", :in => ref_rd, :out => output, :close_others => true)
+#   ref_rd.close
+#
+#   Process.waitpid decode_pid
+#   Process.waitpid cat_pid
+# end
+
+
+# def get_keyframes(debug_output)
+#   frame = 0
+#   keyframes = []
+#   debug_output.each do |line|
+#     line = line.strip
+#     if line.start_with?("keyframe")
+#       frame += 1
+#       if line.split("=")[-1].to_i == 1
+#         keyframes << frame
+#       end
+#     end
+#   end
+#   keyframes
+# end
 
 def parse_data(data)
   # like:
@@ -67,13 +126,11 @@ def parse_data(data)
   data.each do |line|
     value = line.split(", ")[0].split(": ")[-1].split(" = ")[-1].to_f rescue 0
     if line.include?("PSNR")
-      parsed_data[:psnr] << value
+      parsed_data[:psnr] << (value - 30) * 100 / 40.0
+    elsif line.include?("MS-SSIM")
+      parsed_data[:ms_ssim] << (value - 0.95) * 100 / 0.05
     elsif line.include?("SSIM")
-      if line.include?("MS-SSIM")
-        parsed_data[:ms_ssim] << value
-      else
-        parsed_data[:ssim] << value
-      end
+      parsed_data[:ssim] << (value - 0.95) * 100.0 / 0.05
     end
   end
   parsed_data
@@ -82,9 +139,10 @@ end
 class Template
   COUNT = 1000
 
-  def initialize(filename, psnr, ssim, keyframes)
+  def initialize(filename, psnr, ssim, bitrate_data, keyframes)
     @psnr_data = JSON.dump(format_data(psnr))
     @ssim_data = JSON.dump(format_data(ssim))
+    @bitrate_data = JSON.dump(format_data(bitrate_data))
     @keyframes = JSON.dump keyframes
     @filename = filename
   end
@@ -92,7 +150,7 @@ class Template
   def format_data(data)
     vals = []
     data.each_with_index do |p, i|
-      vals << {x: i, y: p}
+      vals << {x: i, y: sprintf("%0.5f", p).to_f}
     end
     vals
   end
@@ -122,13 +180,19 @@ reference = ARGV[0]
 input = ARGV[1]
 
 keyframes = keyframes_for_file(input)
-run_commands(reference, "/tmp/reference.dat")
-run_commands(input, "/tmp/input.dat")
+frame_sizes = frame_sizes_for_file(input)
 
-raw_data = run_comparison("/tmp/reference.dat", "/tmp/input.dat").split("\n")
+max_frame_size = frame_sizes.max
+bitrate_data = frame_sizes.map { |s| 100 * s.to_f / max_frame_size }
+
+# run_commands(reference, "/tmp/reference.dat")
+# run_commands(input, "/tmp/input.dat")
+# raw_data = run_comparison("/tmp/reference.dat", "/tmp/input.dat").split("\n")
+
+raw_data = run_comparison(reference, input).split("\n")
 data = parse_data(raw_data)
 
-renderer = Template.new(input, data[:psnr], data[:ssim], keyframes)
+renderer = Template.new(input, data[:psnr], data[:ssim], bitrate_data, keyframes)
 template_obj = ERB.new(File.new('views/index.html', 'r').read)
 
 puts template_obj.result(renderer.get_binding)
