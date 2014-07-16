@@ -4,7 +4,8 @@
 #include <fcntl.h>
 #include <time.h>
 #include <stdlib.h>
-// #include <unistd.h>
+#include <unistd.h>
+#include <pthread.h>
 
 int DEBUG = 0;
 #define DEBUG1(fmt, ...) if (DEBUG >= 1) { printf("DEBUG1: "); printf(fmt, ##__VA_ARGS__); printf("\n"); }
@@ -19,6 +20,29 @@ int DEBUG = 0;
 #define XCLOCK_MONOTONIC CLOCK_MONOTONIC
 #endif
 
+struct frameinfo {
+  int active;
+  unsigned long frame_number;
+  unsigned char* reference_frame_buffer;
+  unsigned char* degraded_frame_buffer;
+  float psnr_results[4];
+  float ssim_results[4];
+  float ms_ssim_results[4];
+};
+
+#define THREAD_COUNT 8
+pthread_t threads[THREAD_COUNT];
+struct frameinfo frames_info[THREAD_COUNT];
+
+FILE* reference_file;
+FILE* degraded_file;
+
+unsigned int width = 0;
+unsigned int height = 0;
+unsigned int frame_size = 0;
+unsigned long frame_count = 0;
+int all_frames_read = 0;
+
 double timespec_to_double(struct timespec *the_time) {
   double decimal_time = (double)(the_time->tv_sec);
   decimal_time += (double)(the_time->tv_nsec) / 1e9;
@@ -31,13 +55,17 @@ double get_current_time() {
   return timespec_to_double(&now);
 }
 
-void compare_psnr(unsigned long frame_number, unsigned char* ref_frame_buf, unsigned char* deg_frame_buf, unsigned int width, unsigned int height) {
-  unsigned char* ref_plane_buf = ref_frame_buf;
-  unsigned char* deg_plane_buf = deg_frame_buf;
+void* analyze_frame_pair(void* thread_data) {
+  struct frameinfo *frame = (struct frameinfo*)thread_data;
   double before,after;
-
+  unsigned char* ref_plane_buf;
+  unsigned char* deg_plane_buf;
   float luma_result, chroma_cb_result, chroma_cr_result;
 
+  frame->active = 1;
+
+  ref_plane_buf = frame->reference_frame_buffer;
+  deg_plane_buf = frame->degraded_frame_buffer;
   before = get_current_time();
   luma_result =      iqa_psnr(ref_plane_buf, deg_plane_buf, width, height, width);
   ref_plane_buf += (width*height);
@@ -48,11 +76,13 @@ void compare_psnr(unsigned long frame_number, unsigned char* ref_frame_buf, unsi
   chroma_cr_result = iqa_psnr(ref_plane_buf, deg_plane_buf, width, height, width);
   after = get_current_time();
 
-  printf("Frame %lu PSNR (%dms): luma = %0.5f, chroma_cb = %0.5f, chroma_cr = %0.5f\n", frame_number, (int)((after-before) * 1000), luma_result, chroma_cb_result, chroma_cr_result);
+  frame->psnr_results[0] = luma_result;
+  frame->psnr_results[1] = chroma_cb_result;
+  frame->psnr_results[2] = chroma_cr_result;
+  frame->psnr_results[3] = after-before;
 
-  ref_plane_buf = ref_frame_buf;
-  deg_plane_buf = deg_frame_buf;
-
+  ref_plane_buf = frame->reference_frame_buffer;
+  deg_plane_buf = frame->degraded_frame_buffer;
   before = get_current_time();
   luma_result =      iqa_ssim(ref_plane_buf, deg_plane_buf, width, height, width, 0, 0);
   ref_plane_buf += (width*height);
@@ -63,11 +93,13 @@ void compare_psnr(unsigned long frame_number, unsigned char* ref_frame_buf, unsi
   chroma_cr_result = iqa_ssim(ref_plane_buf, deg_plane_buf, width, height, width, 0, 0);
   after = get_current_time();
 
-  printf("Frame %lu SSIM (%dms): luma = %0.5f, chroma_cb = %0.5f, chroma_cr = %0.5f\n", frame_number, (int)((after-before) * 1000), luma_result, chroma_cb_result, chroma_cr_result);
+  frame->ssim_results[0] = luma_result;
+  frame->ssim_results[1] = chroma_cb_result;
+  frame->ssim_results[2] = chroma_cr_result;
+  frame->ssim_results[3] = after-before;
 
-  ref_plane_buf = ref_frame_buf;
-  deg_plane_buf = deg_frame_buf;
-
+  ref_plane_buf = frame->reference_frame_buffer;
+  deg_plane_buf = frame->degraded_frame_buffer;
   before = get_current_time();
   luma_result =      iqa_ms_ssim(ref_plane_buf, deg_plane_buf, width, height, width, 0);
   ref_plane_buf += (width*height);
@@ -78,211 +110,218 @@ void compare_psnr(unsigned long frame_number, unsigned char* ref_frame_buf, unsi
   chroma_cr_result = iqa_ms_ssim(ref_plane_buf, deg_plane_buf, width, height, width, 0);
   after = get_current_time();
 
-  printf("Frame %lu MS-SSIM (%dms): luma = %0.5f, chroma_cb = %0.5f, chroma_cr = %0.5f\n", frame_number, (int)((after-before) * 1000), luma_result, chroma_cb_result, chroma_cr_result);
+  frame->ms_ssim_results[0] = luma_result;
+  frame->ms_ssim_results[1] = chroma_cb_result;
+  frame->ms_ssim_results[2] = chroma_cr_result;
+  frame->ms_ssim_results[3] = after-before;
+
+  pthread_exit(thread_data);
 }
 
-// ffmpeg -i input.mp4 -pix_fmt yuv444p -f yuv4mpegpipe - | comparison_tool
+void validate_headers(FILE* stream, char* stream_name) {
+  char buf[HEADER_BUFFER_SIZE];
+  char* tag;
+  unsigned int stream_width;
+  unsigned int stream_height;
 
+  // Running on the assumption that a STREAM or FRAME header line is never more than BUFFER_SIZE long.
+  //   -- generally safe, especially with controlled streams, but not literally guaranteed.
+  if (fgets(buf, HEADER_BUFFER_SIZE, stream) != NULL) {
+    // printf("Header line: %s", buf);
+
+    if (strstr(buf, "YUV4MPEG2") != buf) {
+      error_exit("Unsupported file: %s is not YUV4MPEG formatted!", stream_name);
+    }
+
+    if (strstr(buf, "C444 ") == NULL) { // Note: 10-bit would be C444p10, for example.
+      error_exit("Unsupported file: %s must be in 8-bit 4:4:4 format!", stream_name);
+    }
+
+    if ((tag = strstr(buf, " W")) != NULL) {
+      sscanf(tag + 2, "%u", &stream_width);
+      if (stream_width == 0) {
+        error_exit("Couldn't determine %s frame width!", stream_name);
+      }
+    } else {
+      error_exit("Couldn't determine %s frame width!", stream_name);
+    }
+
+    if ((tag = strstr(buf, " H")) != NULL) {
+      sscanf(tag + 2, "%u", &stream_height);
+      if (stream_height == 0) {
+        error_exit("Couldn't determine %s frame height!", stream_name);
+      }
+    } else {
+      error_exit("Couldn't determine %s frame height!", stream_name);
+    }
+
+  } else {
+    error_exit("No %s input!", stream_name);
+  }
+
+  // Make sure we read the whole header before we go on.
+  while (!feof(stream) && !strchr(buf, '\n')) {
+    if (fgets(buf, HEADER_BUFFER_SIZE, stream) == NULL) {
+      error_exit("Invalid %s input - no newline after header.", stream_name);
+    }
+  }
+  if (feof(reference_file)) {
+    error_exit("Invalid %s input - no newline after header.", stream_name);
+  }
+
+  if (stream_width < 32 || stream_height < 32) {
+    error_exit("Invalid dimensions -- %s width and height must both be 16 or greater.", stream_name);
+  }
+
+  if (width == 0) {
+    // First stream we're checking - just set the reference values.
+    width = stream_width;
+    height = stream_height;
+  } else {
+    // All other streams -- compare to reference values.
+    if (stream_width != width || stream_height != height) {
+      error_exit("Dimensions for %s do not match reference stream!", stream_name);
+    }
+  }
+}
+
+void read_frame_header(FILE* file, char* stream_name) {
+  char buf[HEADER_BUFFER_SIZE];
+  if (fgets(buf, HEADER_BUFFER_SIZE, file) != NULL) {
+    if (strstr(buf, "FRAME") != buf) {
+      error_exit("Frame header not found in %s!", stream_name);
+    } else if (!strchr(buf, '\n')) {
+      error_exit("Frame header in %s too long - aborting!", stream_name);
+    }
+  }
+}
+
+int read_frame_pair(FILE* ref_file, FILE* deg_file, struct frameinfo* frame) {
+  unsigned int bytes_read;
+
+  read_frame_header(ref_file, "reference stream");
+  read_frame_header(deg_file, "degraded stream");
+
+  bytes_read = fread(frame->reference_frame_buffer, 1, frame_size, ref_file);
+  if (bytes_read < frame_size) {
+    // All done.
+    if (bytes_read > 0) printf("Warning: Final frame of reference stream was incomplete.\n");
+    return 0;
+  }
+
+  bytes_read = fread(frame->degraded_frame_buffer, 1, frame_size, deg_file);
+  if (bytes_read < frame_size) {
+    // All done.
+    if (bytes_read > 0) printf("Warning: Final frame of degraded stream was incomplete.\n");
+    return 0;
+  }
+
+  return 1;
+}
+
+void* collect_results(void* t) {
+  unsigned long frame_number = 0;
+  int thread_number = 0;
+  void* status;
+  int result_code;
+  struct frameinfo* frame;
+
+  while (frame_number < frame_count || !all_frames_read) {
+    if (frames_info[thread_number].active == 1) {
+      result_code = pthread_join(threads[thread_number], &status);
+
+      frame = &frames_info[thread_number];
+      // printf("Frame %lu PSNR (%04dms):    luma = %7.5f, chroma_cb = %7.5f, chroma_cr = %7.5f\n", frame->frame_number, (int)(frame->psnr_results[3] * 1000), frame->psnr_results[0], frame->psnr_results[1], frame->psnr_results[2]);
+      // printf("Frame %lu SSIM (%04dms):    luma = %7.5f, chroma_cb = %7.5f, chroma_cr = %7.5f\n", frame->frame_number, (int)(frame->ssim_results[3] * 1000), frame->ssim_results[0], frame->ssim_results[1], frame->ssim_results[2]);
+      // printf("Frame %lu MS-SSIM (%04dms): luma = %7.5f, chroma_cb = %7.5f, chroma_cr = %7.5f\n", frame->frame_number, (int)(frame->ms_ssim_results[3] * 1000), frame->ms_ssim_results[0], frame->ms_ssim_results[1], frame->ms_ssim_results[2]);
+      printf("Frame %lu PSNR:    luma = %8.5f, chroma_cb = %8.5f, chroma_cr = %8.5f\n", frame->frame_number, frame->psnr_results[0], frame->psnr_results[1], frame->psnr_results[2]);
+      printf("Frame %lu SSIM:    luma = %8.5f, chroma_cb = %8.5f, chroma_cr = %8.5f\n", frame->frame_number, frame->ssim_results[0], frame->ssim_results[1], frame->ssim_results[2]);
+      printf("Frame %lu MS-SSIM: luma = %8.5f, chroma_cb = %8.5f, chroma_cr = %8.5f\n", frame->frame_number, frame->ms_ssim_results[0], frame->ms_ssim_results[1], frame->ms_ssim_results[2]);      
+
+      frame->active = 0;
+
+      frame_number++;
+      thread_number = frame_number % THREAD_COUNT;
+    } else {
+      usleep(100);
+    }
+  }
+
+  pthread_exit(t);
+}
+
+
+// ffmpeg -i input.mp4 -pix_fmt yuv444p -f yuv4mpegpipe - | comparison_tool
 int main(int argc,char* argv[]){
+  int i, result_code;
+
   if ((argc != 3)) {
     fprintf(stderr, "Usage: compare_444p_psnr <reference_file.y4m> <degraded_file.y4m>\n");
     exit(1);
   }
 
-  FILE* reference_file = fopen(argv[1], "r");
+  reference_file = fopen(argv[1], "r");
   if (reference_file < 0) {
     fprintf(stderr, "ERROR: Could not open reference file: %s\n", argv[1]);
     exit(2);
   }
 
-  FILE* degraded_file = fopen(argv[2], "r");
+  degraded_file = fopen(argv[2], "r");
   if (degraded_file < 0) {
     fprintf(stderr, "ERROR: Could not open degraded file: %s\n", argv[2]);
     exit(2);
   }
 
-  unsigned long frame_number = 0;
-  unsigned int width = 0;
-  unsigned int height = 0;
-  unsigned int degraded_width = 0;
-  unsigned int degraded_height = 0;
-  char buf[HEADER_BUFFER_SIZE];
-  char* tag;
-
-  // Running on the assumption that a STREAM or FRAME header line is never more than BUFFER_SIZE long.
-  //   -- generally safe, especially with controlled streams, but not literally guaranteed.
-  if (fgets(buf, HEADER_BUFFER_SIZE, reference_file) != NULL) {
-    // printf("Header line: %s", buf);
-
-    if (strstr(buf, "YUV4MPEG2") != buf) {
-      error_exit("Reference stream is not YUV4MPEG formatted!");
-    }
-
-    if (strstr(buf, "C444 ") == NULL) { // Note: 10-bit would be C444p10, for example.
-      error_exit("Reference stream must be in 8-bit 4:4:4 format!");
-    }
-
-    if ((tag = strstr(buf, " W")) != NULL) {
-      sscanf(tag + 2, "%u", &width);
-      if (width == 0) {
-        error_exit("Couldn't determine reference stream frame width!");
-      }
-    } else {
-      error_exit("Couldn't determine reference stream frame width!");
-    }
-
-    if ((tag = strstr(buf, " H")) != NULL) {
-      sscanf(tag + 2, "%u", &height);
-      if (height == 0) {
-        error_exit("Couldn't determine reference stream frame height!");
-      }
-    } else {
-      error_exit("Couldn't determine reference stream frame height!");
-    }
-
-  } else {
-    error_exit("No reference stream input!");
-  }
-
-  // Make sure we read the whole header before we go on.
-  while (!feof(reference_file) && !strchr(buf, '\n')) {
-    if (fgets(buf, HEADER_BUFFER_SIZE, reference_file) == NULL) {
-      error_exit("Invalid reference stream input - no newline after header.");
-    }
-  }
-  if (feof(reference_file)) {
-    error_exit("Invalid reference stream input - no newline after header.");
-  }
-
-  if (width < 32 || height < 32) {
-    error_exit("Invalid dimensions -- reference stream width and height must both be 16 or greater.");
-  }
-
-
-
-  // Running on the assumption that a STREAM or FRAME header line is never more than BUFFER_SIZE long.
-  //   -- generally safe, especially with controlled streams, but not literally guaranteed.
-  if (fgets(buf, HEADER_BUFFER_SIZE, degraded_file) != NULL) {
-    // printf("Header line: %s", buf);
-
-    if (strstr(buf, "YUV4MPEG2") != buf) {
-      error_exit("Degraded stream is not YUV4MPEG formatted!");
-    }
-
-    if (strstr(buf, "C444 ") == NULL) { // Note: 10-bit would be C444p10, for example.
-      error_exit("Degraded stream must be in 8-bit 4:4:4 format!");
-    }
-
-    if ((tag = strstr(buf, " W")) != NULL) {
-      sscanf(tag + 2, "%u", &degraded_width);
-      if (degraded_width == 0) {
-        error_exit("Couldn't determine degraded stream frame width!");
-      } else if (degraded_width != width) {
-        error_exit("Degraded stream frame width not same as reference stream!");
-      }        
-    } else {
-      error_exit("Couldn't determine degraded stream frame width!");
-    }
-
-    if ((tag = strstr(buf, " H")) != NULL) {
-      sscanf(tag + 2, "%u", &degraded_height);
-      if (degraded_height == 0) {
-        error_exit("Couldn't determine degraded stream frame height!");
-      } else if (degraded_height != height) {
-        error_exit("Degraded stream frame height not same as reference stream!");          
-      }
-    } else {
-      error_exit("Couldn't determine degraded stream frame height!");
-    }
-
-  } else {
-    error_exit("No degraded stream input!");
-  }
-
-  // Make sure we read the whole header before we go on.
-  while (!feof(degraded_file) && !strchr(buf, '\n')) {
-    if (fgets(buf, HEADER_BUFFER_SIZE, degraded_file) == NULL) {
-      error_exit("Invalid degraded stream input - no newline after header.");
-    }
-  }
-  if (feof(degraded_file)) {
-    error_exit("Invalid degraded stream input - no newline after header.");
-  }
-
-
-  int valid_stream = 1;
-  unsigned int bytes_read;
-  unsigned int frame_size = 0;
-  unsigned char* reference_frame_buffer = NULL;
-  unsigned char* degraded_frame_buffer = NULL;
+  validate_headers(reference_file, "reference stream");
+  validate_headers(degraded_file, "degraded stream");
 
   frame_size = (unsigned int)(3 * width * height);
   DEBUG1("Frame size: %ux%u (%u bytes)", width, height, frame_size);
-  
-  reference_frame_buffer = malloc(frame_size);
-  if (reference_frame_buffer == NULL) {
-    error_exit("Out of memory getting reference frame buffer!");
-  }
-  
-  degraded_frame_buffer = malloc(frame_size);
-  if (degraded_frame_buffer == NULL) {
-    error_exit("Out of memory getting degraded frame buffer!");
+
+  for (i = 0; i < THREAD_COUNT; i++) {
+    frames_info[i].active = 0;
+    frames_info[i].reference_frame_buffer = malloc(frame_size);
+    frames_info[i].degraded_frame_buffer = malloc(frame_size);
+    if (frames_info[i].reference_frame_buffer == NULL || frames_info[i].degraded_frame_buffer == NULL) {
+      error_exit("Out of memory allocating frame buffers!");
+    }
   }
 
-  while (valid_stream && !feof(reference_file) && frame_number < 50) {
-    // Read the frame header.
-    if (fgets(buf, HEADER_BUFFER_SIZE, reference_file) != NULL) {
-      // printf("Frame header line: %s", buf);
+  pthread_attr_t attr;
+  pthread_attr_init(&attr);
+  pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_JOINABLE);
 
-      if (strstr(buf, "FRAME") != buf) {
-        error_exit("Frame header not found in reference stream!");
-      } else if (!strchr(buf, '\n')) {
-        error_exit("Frame header in reference stream too long - aborting!");
+  pthread_t collect_results_thread;
+  result_code = pthread_create(&collect_results_thread, &attr, collect_results, NULL);
+  if (result_code) {
+    error_exit("Error creating result collector thread: %d!", result_code);
+  }
+
+  int valid_stream = 1;
+  int thread_number = 0;
+
+  while (valid_stream && !feof(reference_file) && !feof(degraded_file) && frame_count < 50) {
+    if (frames_info[thread_number].active == 1) {
+      usleep(100);
+    } else {
+      frames_info[thread_number].frame_number = frame_count;
+      result_code = read_frame_pair(reference_file, degraded_file, &frames_info[thread_number]);
+      if (result_code == 0) {
+        valid_stream = 0;
       } else {
-        DEBUG1("Got reference frame header %lu...", frame_number);
+        result_code = pthread_create(&threads[thread_number], &attr, analyze_frame_pair, &frames_info[thread_number]);
+        if (result_code) {
+          error_exit("Error creating thread: %d!", result_code);
+        }
       }
+
+      frame_count++;
+      thread_number = frame_count % THREAD_COUNT;
     }
-
-    bytes_read = fread(reference_frame_buffer, 1, frame_size, reference_file);
-
-    if (bytes_read == 0) {
-      // All done.
-      valid_stream = 0;
-    } else if (bytes_read < frame_size) {
-      printf("Warning: Final frame of reference stream was incomplete.\n");
-      valid_stream = 0;
-    }
-
-    // Read the frame header.
-    if (fgets(buf, HEADER_BUFFER_SIZE, degraded_file) != NULL) {
-      // printf("Frame header line: %s", buf);
-
-      if (strstr(buf, "FRAME") != buf) {
-        error_exit("Frame header not found in degraded stream!");
-      } else if (!strchr(buf, '\n')) {
-        error_exit("Frame header in degraded stream too long - aborting!");
-      } else {
-        DEBUG1("Got degraded frame header %lu...", frame_number);
-      }
-    }
-
-    bytes_read = fread(degraded_frame_buffer, 1, frame_size, degraded_file);
-
-    if (bytes_read == 0) {
-      // All done.
-      valid_stream = 0;
-    } else if (bytes_read < frame_size) {
-      printf("Warning: Final frame of degraded stream was incomplete.\n");
-      valid_stream = 0;
-    }
-
-    if (valid_stream) {
-      compare_psnr(frame_number, reference_frame_buffer, degraded_frame_buffer, width, height);
-    }
-
-    frame_number++;
   }
 
+  all_frames_read = 1;
 
+  pthread_exit(NULL);
   return 0;
 }
