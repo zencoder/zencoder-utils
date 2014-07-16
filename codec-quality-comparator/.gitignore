@@ -3,3 +3,4 @@
 *.o
 compare_444p_psnr
 iqa/build
+views/rendered.html
