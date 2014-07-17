@@ -5,3 +5,4 @@ compare_444p_psnr
 frame_to_frame_diff
 iqa/build
 views/rendered.html
+views/*.mp4
