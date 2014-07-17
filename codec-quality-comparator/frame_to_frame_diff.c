@@ -200,23 +200,15 @@ void read_frame_header(FILE* file, char* stream_name) {
   }
 }
 
-int read_frame_pair(FILE* ref_file, FILE* deg_file, struct frameinfo* frame) {
+int read_next_frame(FILE* ref_file, struct frameinfo* frame) {
   unsigned int bytes_read;
 
   read_frame_header(ref_file, "reference stream");
-  read_frame_header(deg_file, "degraded stream");
 
-  bytes_read = fread(frame->reference_frame_buffer, 1, frame_size, ref_file);
+  bytes_read = fread(frame->degraded_frame_buffer, 1, frame_size, ref_file);
   if (bytes_read < frame_size) {
     // All done.
     if (bytes_read > 0) printf("Warning: Final frame of reference stream was incomplete.\n");
-    return 0;
-  }
-
-  bytes_read = fread(frame->degraded_frame_buffer, 1, frame_size, deg_file);
-  if (bytes_read < frame_size) {
-    // All done.
-    if (bytes_read > 0) printf("Warning: Final frame of degraded stream was incomplete.\n");
     return 0;
   }
 
@@ -259,8 +251,8 @@ void* collect_results(void* t) {
 int main(int argc,char* argv[]){
   int i, result_code;
 
-  if ((argc != 3)) {
-    fprintf(stderr, "Usage: %s <reference_file.y4m> <degraded_file.y4m>\n", argv[0]);
+  if ((argc != 2)) {
+    fprintf(stderr, "Usage: %s <reference_file.y4m>\n", argv[0]);
     exit(1);
   }
 
@@ -270,14 +262,7 @@ int main(int argc,char* argv[]){
     exit(2);
   }
 
-  degraded_file = fopen(argv[2], "r");
-  if (degraded_file < 0) {
-    fprintf(stderr, "ERROR: Could not open degraded file: %s\n", argv[2]);
-    exit(2);
-  }
-
   validate_headers(reference_file, "reference stream");
-  validate_headers(degraded_file, "degraded stream");
 
   frame_size = (unsigned int)(3 * width * height);
   DEBUG1("Frame size: %ux%u (%u bytes)", width, height, frame_size);
@@ -303,21 +288,28 @@ int main(int argc,char* argv[]){
 
   int valid_stream = 1;
   int thread_number = 0;
+  unsigned char* prev_frame_buffer = NULL;
 
-  while (valid_stream && !feof(reference_file) && !feof(degraded_file)) {   // && frame_count < 50) {
+  while (valid_stream && !feof(reference_file)) {   // && frame_count < 50) {
     if (frames_info[thread_number].active == 1) {
       usleep(100);
     } else {
       frames_info[thread_number].frame_number = frame_count;
-      result_code = read_frame_pair(reference_file, degraded_file, &frames_info[thread_number]);
+      result_code = read_next_frame(reference_file, &frames_info[thread_number]);
       if (result_code == 0) {
         valid_stream = 0;
         break;
-      } else {
-        result_code = pthread_create(&threads[thread_number], &attr, analyze_frame_pair, &frames_info[thread_number]);
-        if (result_code) {
-          error_exit("Error creating thread: %d!", result_code);
-        }
+      }
+
+      // For the first frame, we just compare to itself.
+      if (prev_frame_buffer == NULL) prev_frame_buffer = frames_info[thread_number].degraded_frame_buffer;
+
+      memcpy(frames_info[thread_number].reference_frame_buffer, prev_frame_buffer, frame_size);
+      prev_frame_buffer = frames_info[thread_number].degraded_frame_buffer;
+
+      result_code = pthread_create(&threads[thread_number], &attr, analyze_frame_pair, &frames_info[thread_number]);
+      if (result_code) {
+        error_exit("Error creating thread: %d!", result_code);
       }
 
       frame_count++;
