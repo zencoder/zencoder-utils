@@ -223,11 +223,19 @@ body {
 </style>
   </head>
   <body>
-    <h1>Codec Quality Comparison: #{reference_filename} vs [#{comparisons.map { |c| c[:filename] }.join(', ')}]</h1>
+    <h1>Codec Quality Comparison: #{File.basename(reference_filename)} vs [#{comparisons.map { |c| File.basename(c[:filename]) }.join(', ')}]</h1>
 
-    <video id="current_video" class="video-js vjs-default-skin" controls preload="auto" width="640" height="360" data-setup='{"example_option":true}'>
+    <table>
+    <tr><td>
+    <video id="reference-video" class="video-js vjs-default-skin" controls preload="auto" width="640" height="360" data-setup='{"example_option":true}'>
       <source src="#{File.basename(reference_filename)}" type="video/mp4" />
     </video>
+    </td><td>
+    <video id="degraded-video" class="video-js vjs-default-skin" controls preload="auto" width="640" height="360" data-setup='{"example_option":true}'>
+      <source src="#{File.basename(comparisons.first[:filename])}" type="video/mp4" />
+    </video>
+    </td></tr>
+    </table>
 
     <script>
 _END_OF_HTML_

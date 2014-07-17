@@ -51,6 +51,7 @@ var gengraph = function(svg, values, maxlen, keyframes, width, height, margin, d
     .attr("class", "line")
     .attr("stroke", color)
     .attr("stroke-width", "1.5px")
+    .attr("stroke-opacity", "0.7")
     .attr("fill", "none")
     .attr("d", line);
 
@@ -78,7 +79,8 @@ var gengraph = function(svg, values, maxlen, keyframes, width, height, margin, d
       d = values[i];
       hover.attr("transform", "translate(" + x(d.x) + "," + y(d.y) + ")");
       hover.select("text").text("(" + Math.ceil(x0) + "," + d.y + ")");
-      videojs('current_video').currentTime(Math.ceil(x0) / 23.976)
+      videojs('reference-video').currentTime(Math.ceil(x0) / 29.97)
+      videojs('degraded-video').currentTime(Math.ceil(x0) / 29.97)
     });
 }
 
