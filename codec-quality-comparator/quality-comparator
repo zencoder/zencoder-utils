@@ -119,55 +119,14 @@ def json_format_data(data)
   JSON.dump( data.map { |y| x += 1; { x: x - 1, y: (y * 10000.0).round/10000.0 } } )
 end
 
-class Template
-  COUNT = 1000
-
-  def initialize(filename, psnr, ssim, bitrate_data, keyframes)
-    @psnr_data = JSON.dump(format_data(psnr))
-    @ssim_data = JSON.dump(format_data(ssim))
-    @bitrate_data = JSON.dump(format_data(bitrate_data))
-    @keyframes = JSON.dump keyframes
-    @filename = filename
-  end
-
-  def format_data(data)
-    vals = []
-    data.each_with_index do |p, i|
-      vals << {x: i, y: sprintf("%0.5f", p).to_f}
-    end
-    vals
-  end
-
-  def psnr_data
-    data = []
-    1.upto(COUNT) do |x|
-      data << {:x => x, :y => rand}
-    end
-    data
-  end
-
-  def ssim_data
-    data = []
-    1.upto(COUNT) do |x|
-      data << {:x => x, :y => rand*2}
-    end
-    data
-  end
-
-  def get_binding
-    binding
-  end
-end
-
+dump_json = false
 if ARGV[0] == "-j"
   dump_json = true
-  reference_filename = ARGV[1]
-  comparison_filenames = ARGV[2..-1]
-else
-  dump_json = false
-  reference_filename = ARGV[0]
-  comparison_filenames = ARGV[1..-1]
+  ARGV.shift
 end
+
+reference_filename = ARGV[0]
+comparison_filenames = ARGV[1..-1]
 [reference_filename,comparison_filenames].flatten.each { |f| raise "File #{f} not found!" unless File.exist?(f) }
 
 comparisons = []
@@ -190,11 +149,6 @@ end
 STDERR.puts "Getting frame diff info for #{reference_filename}"
 raw_data = run_frame_to_frame_diff(reference_filename).split("\n")
 frame_diff_data = parse_data(raw_data)
-
-# renderer = Template.new(input, data[:psnr], data[:ssim], bitrate_data, keyframes)
-# template_obj = ERB.new(File.new('views/index.html', 'r').read)
-#
-# puts template_obj.result(renderer.get_binding)
 
 min_max_values = []
 min_max_values << comparisons.map { |info| info[:data][:psnr].min }.min
