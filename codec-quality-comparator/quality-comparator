@@ -159,9 +159,15 @@ class Template
   end
 end
 
-
-reference_filename = ARGV[0]
-comparison_filenames = ARGV[1..-1]
+if ARGV[0] == "-j"
+  dump_json = true
+  reference_filename = ARGV[1]
+  comparison_filenames = ARGV[2..-1]
+else
+  dump_json = false
+  reference_filename = ARGV[0]
+  comparison_filenames = ARGV[1..-1]
+end
 [reference_filename,comparison_filenames].flatten.each { |f| raise "File #{f} not found!" unless File.exist?(f) }
 
 comparisons = []
@@ -189,6 +195,23 @@ frame_diff_data = parse_data(raw_data)
 # template_obj = ERB.new(File.new('views/index.html', 'r').read)
 #
 # puts template_obj.result(renderer.get_binding)
+
+min_max_values = []
+min_max_values << comparisons.map { |info| info[:data][:psnr].min }.min
+min_max_values << comparisons.map { |info| info[:data][:psnr].max }.max
+min_max_values << comparisons.map { |info| info[:data][:ssim].min }.min
+min_max_values << comparisons.map { |info| info[:data][:ssim].max }.max
+min_max_values << comparisons.map { |info| info[:bitrate_data].min }.min
+min_max_values << comparisons.map { |info| info[:bitrate_data].max }.max
+
+if dump_json
+  data = {
+    :reference_filename => reference_filename,
+    :comparisons => comparisons
+  }
+  puts JSON.dump(data)
+  exit(0)
+end
 
 puts <<"_END_OF_HTML_"
 <html>
@@ -231,14 +254,6 @@ body {
 
     <script>
 _END_OF_HTML_
-
-min_max_values = []
-min_max_values << comparisons.map { |info| info[:data][:psnr].min }.min
-min_max_values << comparisons.map { |info| info[:data][:psnr].max }.max
-min_max_values << comparisons.map { |info| info[:data][:ssim].min }.min
-min_max_values << comparisons.map { |info| info[:data][:ssim].max }.max
-min_max_values << comparisons.map { |info| info[:bitrate_data].min }.min
-min_max_values << comparisons.map { |info| info[:bitrate_data].max }.max
 
 puts "$(function() {
   var data = ["
