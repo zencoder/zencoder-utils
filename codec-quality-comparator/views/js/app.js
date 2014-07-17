@@ -77,11 +77,12 @@ var gengraph = function(svg, values, maxlen, keyframes, width, height, margin, d
       var i = bisector(values, x0, 1);
       d = values[i];
       hover.attr("transform", "translate(" + x(d.x) + "," + y(d.y) + ")");
-      hover.select("text").text(d.y);
+      hover.select("text").text("(" + Math.ceil(x0) + "," + d.y + ")");
+      videojs('current_video').currentTime(Math.ceil(x0 + 0.5) / 24.0)
     });
 }
 
-var drawChart = function(data, keyframes) {
+var drawChart = function(data, keyframes, minmaxes) {
   var margin = {
       top: 20,
       right: 50,
@@ -106,10 +107,19 @@ var drawChart = function(data, keyframes) {
         label = data[i].name,
         values = data[i].data;
 
-    var domain = [d3.min(values, function(x) { return x.y }),
-                  d3.max(values, function(x) { return x.y })]
+    var domain;
+    if (i + 2 >= data.length) {
+      domain = [d3.min(values, function(x) { return x.y }),
+                d3.max(values, function(x) { return x.y })]
+    } else {
+      domain = [minmaxes[(i % 3) * 2], minmaxes[(i % 3) * 2 + 1]]
+    }
+
+    if (i + 3 > data.length) { keyframes = [0] }
 
     gengraph(svg, values, frames, keyframes, width, height, margin, domain, color, label);
-    margin.top += 100;
+    margin.top += 105;
+    if (i % 3 == 2 && (i + 3 < data.length)) { margin.top -= 315 }
+    if (i + 3 >= data.length) { margin.top += 5 }
   }
 }
