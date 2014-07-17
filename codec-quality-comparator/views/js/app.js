@@ -78,7 +78,7 @@ var gengraph = function(svg, values, maxlen, keyframes, width, height, margin, d
       d = values[i];
       hover.attr("transform", "translate(" + x(d.x) + "," + y(d.y) + ")");
       hover.select("text").text("(" + Math.ceil(x0) + "," + d.y + ")");
-      videojs('current_video').currentTime(Math.ceil(x0 + 0.5) / 24.0)
+      videojs('current_video').currentTime(Math.ceil(x0) / 23.976)
     });
 }
 
