@@ -119,6 +119,11 @@ def json_format_data(data)
   JSON.dump( data.map { |y| x += 1; { x: x - 1, y: (y * 10000.0).round/10000.0 } } )
 end
 
+def middle_99(data)
+  exclude = (data.length * 0.005).floor
+  data.sort[exclude..-(exclude+1)]
+end
+
 dump_json = false
 if ARGV[0] == "-j"
   dump_json = true
@@ -157,6 +162,14 @@ min_max_values << comparisons.map { |info| info[:data][:ssim].min }.min
 min_max_values << comparisons.map { |info| info[:data][:ssim].max }.max
 min_max_values << comparisons.map { |info| info[:bitrate_data].min }.min
 min_max_values << comparisons.map { |info| info[:bitrate_data].max }.max
+
+# Also the mid-99% values
+min_max_values << comparisons.map { |info| middle_99(info[:data][:psnr]).min }.min
+min_max_values << comparisons.map { |info| middle_99(info[:data][:psnr]).max }.max
+min_max_values << comparisons.map { |info| middle_99(info[:data][:ssim]).min }.min
+min_max_values << comparisons.map { |info| middle_99(info[:data][:ssim]).max }.max
+min_max_values << comparisons.map { |info| middle_99(info[:bitrate_data]).min }.min
+min_max_values << comparisons.map { |info| middle_99(info[:bitrate_data]).max }.max
 
 if dump_json
   data = {
@@ -205,11 +218,11 @@ body {
     <table>
     <tr><td>
     <video id="reference-video" class="video-js vjs-default-skin" controls preload="auto" width="640" height="360" data-setup='{"example_option":true}'>
-      <source src="#{File.basename(reference_filename)}" type="video/mp4" />
+      <source src="#{File.basename(comparisons.length == 1 ? reference_filename : comparisons.first[:filename])}" type="video/mp4" />
     </video>
     </td><td>
     <video id="degraded-video" class="video-js vjs-default-skin" controls preload="auto" width="640" height="360" data-setup='{"example_option":true}'>
-      <source src="#{File.basename(comparisons.first[:filename])}" type="video/mp4" />
+      <source src="#{File.basename(comparisons.length == 1 ? comparisons.first[:filename] : comparisons[1][:filename])}" type="video/mp4" />
     </video>
     </td></tr>
     </table>
@@ -220,14 +233,15 @@ _END_OF_HTML_
 puts "$(function() {
   var data = ["
 
+    colors = ['green', 'red', 'blue']
     comparisons.each_with_index do |info, index|
-      puts "{ name: 'PSNR-#{index+1}', color: 'red', data: #{json_format_data(info[:data][:psnr])}, },"
-      puts "{ name: 'SSIM-#{index+1}', color: 'green', data: #{json_format_data(info[:data][:ssim])}, },"
-      puts "{ name: 'Bitrate-#{index+1}', color: 'blue', data: #{json_format_data(info[:bitrate_data])}, },"
+      puts "{ name: 'PSNR-#{index+1}', color: '#{colors[index % 3]}', data: #{json_format_data(info[:data][:psnr])}, },"
+      puts "{ name: 'SSIM-#{index+1}', color: '#{colors[index % 3]}', data: #{json_format_data(info[:data][:ssim])}, },"
+      puts "{ name: 'Bitrate-#{index+1}', color: '#{colors[index % 3]}', data: #{json_format_data(info[:bitrate_data])}, },"
     end
 
-    puts "{ name: 'PSNR-D', color: '#f99', data: #{json_format_data(frame_diff_data[:psnr].map { |v| 80 - v })}, },"
-    puts "{ name: 'SSIM-D', color: '#9f9', data: #{json_format_data(frame_diff_data[:ssim].map { |v| 1.0 - v })}, },"
+    puts "{ name: 'PSNR-D', color: '#aaa', data: #{json_format_data(frame_diff_data[:psnr].map { |v| 80 - v })}, },"
+    puts "{ name: 'SSIM-D', color: '#aaa', data: #{json_format_data(frame_diff_data[:ssim].map { |v| 1.0 - v })}, },"
 
 puts "];
   drawChart(data, [#{comparisons.first[:keyframes].join(',')}], [#{min_max_values.join(',')}]);

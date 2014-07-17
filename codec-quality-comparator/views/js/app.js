@@ -1,4 +1,4 @@
-var gengraph = function(svg, values, maxlen, keyframes, width, height, margin, domain, color, label) {
+var gengraph = function(svg, values, maxlen, keyframes, width, height, margin, domain, color, label, label_offset) {
 
   var x = d3.scale.linear()
       .domain([0, maxlen])
@@ -40,7 +40,7 @@ var gengraph = function(svg, values, maxlen, keyframes, width, height, margin, d
       .attr("transform", "translate(" + width + ",0)")
       .call(yAxis)
       .append("text")
-        .attr("y", 10)
+        .attr("y", 10 + label_offset)
         .attr("x", -10)
         .attr("fill", color)
         .style("text-anchor", "end")
@@ -108,20 +108,25 @@ var drawChart = function(data, keyframes, minmaxes) {
     var color = data[i].color,
         label = data[i].name,
         values = data[i].data;
+    if (label.indexOf('PSNR') < 0) {
 
     var domain;
     if (i + 2 >= data.length) {
       domain = [d3.min(values, function(x) { return x.y }),
                 d3.max(values, function(x) { return x.y })]
     } else {
-      domain = [minmaxes[(i % 3) * 2], minmaxes[(i % 3) * 2 + 1]]
+      // domain = [minmaxes[(i % 3) * 2], minmaxes[(i % 3) * 2 + 1]]
+      domain = [minmaxes[(i % 3) * 2 + minmaxes.length / 2], minmaxes[(i % 3) * 2 + 1 + minmaxes.length / 2]]
     }
 
     if (i + 3 > data.length) { keyframes = [0] }
 
-    gengraph(svg, values, frames, keyframes, width, height, margin, domain, color, label);
-    margin.top += 105;
-    if (i % 3 == 2 && (i + 3 < data.length)) { margin.top -= 315 }
-    if (i + 3 >= data.length) { margin.top += 5 }
+    var label_offset = Math.floor(10 * (i / 3));
+
+    gengraph(svg, values, frames, keyframes, width, height, margin, domain, color, label, label_offset);
+    margin.top += 110;
+    if (i % 3 == 2 && (i + 3 < data.length)) { margin.top -= 220 }
+    if (i + 3 >= data.length) { margin.top += 10 }
+  }
   }
 }
