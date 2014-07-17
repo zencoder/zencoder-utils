@@ -126,11 +126,11 @@ def parse_data(data)
   data.each do |line|
     value = line.split(", ")[0].split(": ")[-1].split(" = ")[-1].to_f rescue 0
     if line.include?("PSNR")
-      parsed_data[:psnr] << (value - 30) * 100 / 40.0
+      parsed_data[:psnr] << value
     elsif line.include?("MS-SSIM")
-      parsed_data[:ms_ssim] << (value - 0.95) * 100 / 0.05
+      parsed_data[:ms_ssim] << value
     elsif line.include?("SSIM")
-      parsed_data[:ssim] << (value - 0.95) * 100.0 / 0.05
+      parsed_data[:ssim] << value
     end
   end
   parsed_data
