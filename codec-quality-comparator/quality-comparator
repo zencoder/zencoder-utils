@@ -72,46 +72,6 @@ def run_comparison(reference_file, degraded_file)
   result_data
 end
 
-# def run_comparison(reference, degraded)
-#   rd, wr = IO.pipe
-#   pid = Process.spawn("./compare_444p_psnr #{reference} #{degraded}", :out => wr, :close_others => true)
-#   wr.close
-#
-#   data = rd.read
-#   Process.waitpid pid
-#
-#   data
-# end
-
-# def run_commands(file, output)
-#   ref_rd, ref_wr = IO.pipe
-#   decode_pid = Process.spawn("ffmpeg -i #{file} -pix_fmt yuv444p -f yuv4mpegpipe -", :out => ref_wr, :err => "/dev/null", :close_others => true)
-#   ref_wr.close
-#
-#   # FIXME this is stupid
-#   cat_pid = Process.spawn("cat", :in => ref_rd, :out => output, :close_others => true)
-#   ref_rd.close
-#
-#   Process.waitpid decode_pid
-#   Process.waitpid cat_pid
-# end
-
-
-# def get_keyframes(debug_output)
-#   frame = 0
-#   keyframes = []
-#   debug_output.each do |line|
-#     line = line.strip
-#     if line.start_with?("keyframe")
-#       frame += 1
-#       if line.split("=")[-1].to_i == 1
-#         keyframes << frame
-#       end
-#     end
-#   end
-#   keyframes
-# end
-
 def parse_data(data)
   # like:
   # Frame 0 PSNR (5ms): luma = inf, chroma_cb = inf, chroma_cr = inf
@@ -184,10 +144,6 @@ frame_sizes = frame_sizes_for_file(input)
 
 max_frame_size = frame_sizes.max
 bitrate_data = frame_sizes.map { |s| 100 * s.to_f / max_frame_size }
-
-# run_commands(reference, "/tmp/reference.dat")
-# run_commands(input, "/tmp/input.dat")
-# raw_data = run_comparison("/tmp/reference.dat", "/tmp/input.dat").split("\n")
 
 raw_data = run_comparison(reference, input).split("\n")
 data = parse_data(raw_data)
