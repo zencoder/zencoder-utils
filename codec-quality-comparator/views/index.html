@@ -38,6 +38,11 @@ body {
            data: <%= @ssim_data %>,
            name: 'SSIM'
           },
+          {
+           color: 'blue',
+           data: <%= @bitrate_data %>,
+           name: 'Bitrate'
+          },
         ];
         drawChart(data, <%= @keyframes %>);
       });

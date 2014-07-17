@@ -7,7 +7,7 @@
 #include <unistd.h>
 #include <pthread.h>
 
-#define DO_MS_SSIM 1
+#define DO_MS_SSIM 0
 #define THREAD_COUNT 8
 
 int DEBUG = 0;
