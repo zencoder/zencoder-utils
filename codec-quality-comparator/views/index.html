@@ -3,15 +3,28 @@
     <title>Codec Quality Comparison</title>
     <script src="js/jquery-2.1.1.min.js"></script>
     <script src="js/d3/d3.min.js"></script>
-    <script src="js/rickshaw.min.js"></script>
     <script src="js/app.js"></script>
-    <link rel="stylesheet" type="text/css" href="css/rickshaw.css">
+    <style>
+
+body {
+  font: 10px sans-serif;
+}
+
+.axis path,
+.axis line {
+  fill: none;
+  stroke: #000;
+  shape-rendering: crispEdges;
+}
+
+.x.axis path {
+  display: none;
+}
+
+</style>
   </head>
   <body>
-    <h1>Codec Quality Comparison</h1>
-    <div id="area"></div>
-    <div id="timeline"></div>
-    <div id="legend"></div>
+    <h1>Codec Quality Comparison <%= @filename %></h1>
     <script>
       $(function() {
         var data = [
