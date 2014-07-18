@@ -66,16 +66,19 @@ void* analyze_frame_pair(void* thread_data) {
 
   frame->active = 1;
 
+  chroma_cb_result = 0.0;
+  chroma_cr_result = 0.0;
+
   ref_plane_buf = frame->reference_frame_buffer;
   deg_plane_buf = frame->degraded_frame_buffer;
   before = get_current_time();
   luma_result =      iqa_psnr(ref_plane_buf, deg_plane_buf, width, height, width);
-  ref_plane_buf += (width*height);
-  deg_plane_buf += (width*height);
-  chroma_cb_result = iqa_psnr(ref_plane_buf, deg_plane_buf, width, height, width);
-  ref_plane_buf += (width*height);
-  deg_plane_buf += (width*height);
-  chroma_cr_result = iqa_psnr(ref_plane_buf, deg_plane_buf, width, height, width);
+  // ref_plane_buf += (width*height);
+  // deg_plane_buf += (width*height);
+  // chroma_cb_result = iqa_psnr(ref_plane_buf, deg_plane_buf, width, height, width);
+  // ref_plane_buf += (width*height);
+  // deg_plane_buf += (width*height);
+  // chroma_cr_result = iqa_psnr(ref_plane_buf, deg_plane_buf, width, height, width);
   after = get_current_time();
 
   frame->psnr_results[0] = luma_result;
@@ -87,12 +90,12 @@ void* analyze_frame_pair(void* thread_data) {
   deg_plane_buf = frame->degraded_frame_buffer;
   before = get_current_time();
   luma_result =      iqa_ssim(ref_plane_buf, deg_plane_buf, width, height, width, 0, 0);
-  ref_plane_buf += (width*height);
-  deg_plane_buf += (width*height);
-  chroma_cb_result = iqa_ssim(ref_plane_buf, deg_plane_buf, width, height, width, 0, 0);
-  ref_plane_buf += (width*height);
-  deg_plane_buf += (width*height);
-  chroma_cr_result = iqa_ssim(ref_plane_buf, deg_plane_buf, width, height, width, 0, 0);
+  // ref_plane_buf += (width*height);
+  // deg_plane_buf += (width*height);
+  // chroma_cb_result = iqa_ssim(ref_plane_buf, deg_plane_buf, width, height, width, 0, 0);
+  // ref_plane_buf += (width*height);
+  // deg_plane_buf += (width*height);
+  // chroma_cr_result = iqa_ssim(ref_plane_buf, deg_plane_buf, width, height, width, 0, 0);
   after = get_current_time();
 
   frame->ssim_results[0] = luma_result;
@@ -105,12 +108,12 @@ void* analyze_frame_pair(void* thread_data) {
     deg_plane_buf = frame->degraded_frame_buffer;
     before = get_current_time();
     luma_result =      iqa_ms_ssim(ref_plane_buf, deg_plane_buf, width, height, width, 0);
-    ref_plane_buf += (width*height);
-    deg_plane_buf += (width*height);
-    chroma_cb_result = iqa_ms_ssim(ref_plane_buf, deg_plane_buf, width, height, width, 0);
-    ref_plane_buf += (width*height);
-    deg_plane_buf += (width*height);
-    chroma_cr_result = iqa_ms_ssim(ref_plane_buf, deg_plane_buf, width, height, width, 0);
+    // ref_plane_buf += (width*height);
+    // deg_plane_buf += (width*height);
+    // chroma_cb_result = iqa_ms_ssim(ref_plane_buf, deg_plane_buf, width, height, width, 0);
+    // ref_plane_buf += (width*height);
+    // deg_plane_buf += (width*height);
+    // chroma_cr_result = iqa_ms_ssim(ref_plane_buf, deg_plane_buf, width, height, width, 0);
     after = get_current_time();
   }
 

@@ -142,8 +142,8 @@ comparison_filenames.each do |comparison_filename|
     :keyframes => keyframes_for_file(comparison_filename),
     :frame_sizes => frame_sizes_for_file(comparison_filename)
   }
-  max_frame_size = info[:frame_sizes].max
-  info[:bitrate_data] = info[:frame_sizes].map { |s| 100 * s.to_f / max_frame_size }
+
+  info[:bitrate_data] = info[:frame_sizes].map { |s| s * 8 * 29.97 }
 
   raw_data = run_comparison(reference_filename, comparison_filename).split("\n")
   info[:data] = parse_data(raw_data)
