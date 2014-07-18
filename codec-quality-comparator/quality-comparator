@@ -233,11 +233,11 @@ _END_OF_HTML_
 puts "$(function() {
   var data = ["
 
-    colors = ['green', 'red', 'blue']
+    colors = ['green', 'red', 'blue', 'orange', 'purple']
     comparisons.each_with_index do |info, index|
-      puts "{ name: 'PSNR-#{index+1}', color: '#{colors[index % 3]}', data: #{json_format_data(info[:data][:psnr])}, },"
-      puts "{ name: 'SSIM-#{index+1}', color: '#{colors[index % 3]}', data: #{json_format_data(info[:data][:ssim])}, },"
-      puts "{ name: 'Bitrate-#{index+1}', color: '#{colors[index % 3]}', data: #{json_format_data(info[:bitrate_data])}, },"
+      puts "{ name: 'PSNR-#{index+1}', color: '#{colors[index % 5]}', data: #{json_format_data(info[:data][:psnr])}, },"
+      puts "{ name: 'SSIM-#{index+1}', color: '#{colors[index % 5]}', data: #{json_format_data(info[:data][:ssim])}, },"
+      puts "{ name: 'Bitrate-#{index+1}', color: '#{colors[index % 5]}', data: #{json_format_data(info[:bitrate_data])}, },"
     end
 
     puts "{ name: 'PSNR-D', color: '#aaa', data: #{json_format_data(frame_diff_data[:psnr].map { |v| 80 - v })}, },"
