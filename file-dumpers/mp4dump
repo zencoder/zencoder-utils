@@ -7,6 +7,7 @@
 $:.unshift(File.dirname(__FILE__))
 require 'dump_helpers'
 require 'zlib'
+require 'base64'
 
 
 class BoxFile
@@ -1079,6 +1080,181 @@ class SchmBox < SubBox
     cputs "Scheme: #{@scheme}", :dark_gray
     print prefix
     cputs "Scheme Version: #{@scheme_version}", :dark_gray
+  end
+end
+
+class UuidBox < Box
+  handles 'uuid', 'Extended Information'
+
+  ALGORITHM_TYPES = ['Not Encrypted', 'AES-128-CTR', 'AES-128-CBC']
+  SAMPLE_ENCRYPTION_TYPE = 'A2394F52-5A9B-4F14-A244-6C427C648DF4'
+  PSSH_TYPE = 'D08A4F18-10F3-4A82-B6C8-32D8ABA183D3'
+
+  SYSTEM_IDS = {
+    '79F0049A-4098-8642-AB92-E65BE0885F95' => 'PlayReady Object v4.0.0.0',
+    '9A04F079-9840-4286-AB92-E65BE0885F95' => 'PlayReady Object v4.1.0.0'
+  }
+
+  attr_accessor :version, :flags, :scheme, :scheme_version
+
+  def initialize(*args)
+    @extended_type = nil
+    @version = nil
+    @flags = nil
+    @algorithm_id = nil
+    @iv_size = nil
+    @key_id = nil
+    @system_id = nil
+    @pssh_data_size = nil
+    @pro_records = []
+    super
+  end
+
+  def read_data(stream)
+    @extended_type,@version,@flags = stream.uuid, stream.ui8, stream.ui24
+
+    if @extended_type == SAMPLE_ENCRYPTION_TYPE
+      if (@flags & 1) == 1
+        @algorithm_id,@iv_size,@key_id = stream.ui24, stream.ui8, stream.key128
+      end
+      @sample_count = stream.ui32
+
+      # What follows is IV entries, and possibly info about clear vs. encrypted data.
+      #
+      # {
+      #   unsigned int(IV_size) InitializationVector;
+      #   if (flags & 0x000002) {
+      #     unsigned int(16) NumberOfEntries;
+      #     {
+      #       unsigned int(16) BytesOfClearData;
+      #       unsigned int(32) BytesOfEncryptedData;
+      #     } [ NumberOfEntries]
+      #   }
+      # }[ sample_count ]
+
+    elsif @extended_type == PSSH_TYPE
+      @system_id, @pssh_data_size = stream.guid, stream.ui32
+
+      # Decode PlayReady PRO header.
+      if SYSTEM_IDS[@system_id].to_s =~ /^PlayReady/
+        pro_length = stream.dword
+        pro_record_count = stream.word
+        pro_record_count.times do
+          record_type = stream.word
+          record_length = stream.word
+          record_value = stream.read(record_length)
+          decoded = {}
+
+          if record_type == 1 # Rights Management Headers
+            ascii = record_value.utf16_to_ascii
+            decoded[:header_version] = $1 if ascii =~ /version="([^"]+)"/
+            decoded[:keylen] = $1.to_i if ascii =~ /<KEYLEN>(\d+)<\/KEYLEN>/
+            decoded[:algid] = $1 if ascii =~ /<ALGID>([^<]+)<\/ALGID>/
+            decoded[:la_url] = $1 if ascii =~ /<LA_URL>([^<]+)<\/LA_URL>/
+            decoded[:kid_base64] = $1 if ascii =~ /<KID>([^<]+)<\/KID>/
+            decoded[:kid] = Base64.decode64(decoded[:kid_base64]).unpack('H*').first if decoded[:kid_base64]
+          end
+
+          @pro_records << {
+            :type => ['Unknown','Rights Management Header','Reserved','Embedded License Store'][record_type] || 'Unknown',
+            :size => record_length,
+            :value => record_value,
+            :empty => record_value.to_s.gsub(/\x00/n,'').length == 0,
+            :decoded => decoded
+          }
+        end
+      end
+    end
+  end
+
+  def print_extra_info(prefix = '')
+    if @extended_type == SAMPLE_ENCRYPTION_TYPE
+      print prefix
+      cputs "Extended Type: Sample Encryption Box", :dark_gray
+      print prefix
+      cputs "Overrides TrackEncryptionBox parameters: #{((@flags & 1) == 1) ? 'Yes' : 'No'}", :dark_gray
+      print prefix
+      cputs "Uses Subsample Encryption: #{((@flags & 2) == 2) ? 'Yes' : 'No'}", :dark_gray
+
+      if (@flags & 1) == 1
+        print prefix
+        cputs "Algorithm ID: #{@algorithm_id} (#{ALGORITHM_TYPES[@algorithm_id] || 'Unknown'})", :dark_gray
+        print prefix
+        cputs "IV Size: #{@iv_size}", :dark_gray
+        print prefix
+        cputs "Key ID: #{@key_id}", :dark_gray
+      end
+
+    elsif @extended_type == PSSH_TYPE
+      print prefix
+      cputs "Extended Type: PSSH (Protection System Specific Header) Box", :dark_gray
+      print prefix
+      cputs "System ID: #{@system_id} (#{SYSTEM_IDS[@system_id] || 'Unknown'})", :dark_gray
+
+      if SYSTEM_IDS[@system_id].to_s =~ /^PlayReady/
+        @pro_records.each do |pro|
+          print prefix
+          cputs "PlayReady Header Object: #{pro[:type]}#{' (Empty)' if pro[:empty]}", :dark_gray
+
+          pro[:decoded].keys.sort.each do |key|
+            print prefix
+            cputs "  #{key}: #{pro[:decoded][key]}", :dark_gray
+          end
+
+          if $VERBOSE && pro[:type] == 'Rights Management Header'
+            print prefix
+            cputs "Header Object Value: #{pro[:value]}", :dark_gray
+          end
+        end
+      end
+
+    else
+      print prefix
+      cputs "Extended Type: #{@extended_type} (Unknown)", :dark_gray
+    end
+  end
+end
+
+class UuidSubBox < SubBox
+  handles 'uuid', 'Extended Information'
+
+  ALGORITHM_TYPES = ['Not Encrypted', 'AES-128-CTR', 'AES-128-CBC']
+  TRACK_ENCRYPTION_TYPE = '8974DBCE-7BE7-4C51-84F9-7148F9882554'
+
+  attr_accessor :version, :flags, :scheme, :scheme_version
+
+  def initialize(*args)
+    @extended_type = nil
+    @version = nil
+    @flags = nil
+    @algorithm_id = nil
+    @iv_size = nil
+    @key_id = nil
+    super
+  end
+
+  def read_data(stream)
+    @extended_type,@version,@flags = stream.uuid, stream.ui8, stream.ui24
+
+    if @extended_type == TRACK_ENCRYPTION_TYPE
+      @algorithm_id,@iv_size,@key_id = stream.ui24, stream.ui8, stream.key128
+    end
+  end
+
+  def print_extra_info(prefix = '')
+    if @extended_type == TRACK_ENCRYPTION_TYPE
+      print prefix
+      cputs "Extended Type: Track Encryption Box", :dark_gray
+      print prefix
+      cputs "Algorithm ID: #{@algorithm_id} (#{ALGORITHM_TYPES[@algorithm_id] || 'Unknown'})", :dark_gray
+      print prefix
+      cputs "IV Size: #{@iv_size}", :dark_gray
+      print prefix
+      cputs "Key ID: #{@key_id}", :dark_gray
+    else
+      print prefix
+      cputs "Extended Type: #{@extended_type} (Unknown)", :dark_gray
+    end
   end
 end
 

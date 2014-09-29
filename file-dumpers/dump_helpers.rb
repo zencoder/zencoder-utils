@@ -14,6 +14,13 @@ class String
   def hex
     unpack('H*').first.scan(/../).join(' ')
   end
+
+  # Once we're on Ruby 2, do this the "real way".  This is a hack hack hack.
+  def utf16_to_ascii
+    r = []
+    bytes.to_a.each_with_index { |v,i| r << v if i % 2 == 0 }
+    r.pack('c*')
+  end
 end
 
 
@@ -132,7 +139,13 @@ module IoHelpers
     v + b
   end
 
-  # Windows/ASF guid
+  # 128 bit encryption key type thing.
+  def key128; parts = read(16).unpack('NNNN'); sprintf('%08x%08x%08x%08x', *parts).upcase; end
+
+  # Standard UUID with all sets in big-endian order.
+  def uuid; parts = read(16).unpack('NnnnNn'); sprintf('%08x-%04x-%04x-%04x-%08x%04x', *parts).upcase; end
+
+  # Windows/ASF guid with first three sets in little-endian order.
   def guid; parts = read(16).unpack('VvvnNn'); sprintf('%08x-%04x-%04x-%04x-%08x%04x', *parts).upcase; end
 
   def fourcc; read(4).unpack('a*').first; end
