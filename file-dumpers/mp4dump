@@ -953,7 +953,7 @@ class SencBox < Box
           print prefix
           cputs ("  Subsample %2d: bytes_clear = #{subsample[:bytes_clear_data]}, bytes_encrypted = #{subsample[:bytes_encrypted_data]}" % (subindex + 1)), :dark_gray
         end
-        if trun && trun.entries[index] && trun.entries[index][:size].to_i > 0 && trun.entries[index][:size].to_i != subsamples_total_size
+        if sample[:subsamples] && trun.entries[index] && trun.entries[index][:size].to_i > 0 && trun.entries[index][:size].to_i != subsamples_total_size
           print prefix
           cputs "  Subsamples size does not match trun entry size!", :red
         end
@@ -1217,7 +1217,7 @@ class UuidBox < Box
             print prefix
             cputs ("  Subsample %2d: bytes_clear = #{subsample[:bytes_clear_data]}, bytes_encrypted = #{subsample[:bytes_encrypted_data]}" % (subindex + 1)), :dark_gray
           end
-          if trun && trun.entries[index] && trun.entries[index][:size].to_i > 0 && trun.entries[index][:size].to_i != subsamples_total_size
+          if sample[:subsamples] && trun && trun.entries[index] && trun.entries[index][:size].to_i > 0 && trun.entries[index][:size].to_i != subsamples_total_size
             print prefix
             cputs "  Subsamples size does not match trun entry size!", :red
           end
