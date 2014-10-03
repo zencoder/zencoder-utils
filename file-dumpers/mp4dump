@@ -914,11 +914,12 @@ class SencBox < Box
   def read_data(stream)
     @version, @flags = stream.ui8, stream.ui24
     @sample_count = stream.ui32
+
     @sample_count.times do |index|
       sample_info = {}
-      # TODO: Assuming 16-byte IV here, but it could be 8-byte too.  Have to get
+      # TODO: Assuming 8-byte IV here, but it could be 16-byte too.  Have to get
       # that data from 'tenc' box which could be in a separate init file.
-      sample_info[:iv] = stream.read(16)
+      sample_info[:iv] = stream.read(8)
       if (@flags & 2) == 2
         sample_info[:subsamples] = []
         sample_info[:subsample_count] = stream.ui16
@@ -941,13 +942,20 @@ class SencBox < Box
     print prefix
     cputs "Sample Count: #{@sample_count}", :dark_gray
     if $VERBOSE
+      trun = parent.first_child('trun')
       @samples.each_with_index do |sample, index|
         print prefix
         cputs ("Sample %2d IV: #{sample[:iv].unpack('H*').first}" % (index + 1)), :dark_gray
 
+        subsamples_total_size = 0
         (sample[:subsamples] || []).each_with_index do |subsample, subindex|
+          subsamples_total_size += subsample[:bytes_clear_data] + subsample[:bytes_encrypted_data]
           print prefix
           cputs ("  Subsample %2d: bytes_clear = #{subsample[:bytes_clear_data]}, bytes_encrypted = #{subsample[:bytes_encrypted_data]}" % (subindex + 1)), :dark_gray
+        end
+        if trun && trun.entries[index] && trun.entries[index][:size].to_i > 0 && trun.entries[index][:size].to_i != subsamples_total_size
+          print prefix
+          cputs "  Subsamples size does not match trun entry size!", :red
         end
       end
     end
@@ -1107,6 +1115,8 @@ class UuidBox < Box
     @system_id = nil
     @pssh_data_size = nil
     @pro_records = []
+    @sample_count = nil
+    @samples = []
     super
   end
 
@@ -1119,18 +1129,23 @@ class UuidBox < Box
       end
       @sample_count = stream.ui32
 
-      # What follows is IV entries, and possibly info about clear vs. encrypted data.
-      #
-      # {
-      #   unsigned int(IV_size) InitializationVector;
-      #   if (flags & 0x000002) {
-      #     unsigned int(16) NumberOfEntries;
-      #     {
-      #       unsigned int(16) BytesOfClearData;
-      #       unsigned int(32) BytesOfEncryptedData;
-      #     } [ NumberOfEntries]
-      #   }
-      # }[ sample_count ]
+      @sample_count.times do |index|
+        sample_info = {}
+        # TODO: Assuming 8-byte IV here, but it could be 16-byte too.  Might have to get
+        # that data from 'tenc' box which could be in a separate init file.
+        sample_info[:iv] = stream.read(@iv_size || 8)
+        if (@flags & 2) == 2
+          sample_info[:subsamples] = []
+          sample_info[:subsample_count] = stream.ui16
+          sample_info[:subsample_count].times do
+            subsample_info = {}
+            subsample_info[:bytes_clear_data] = stream.ui16
+            subsample_info[:bytes_encrypted_data] = stream.ui32
+            sample_info[:subsamples] << subsample_info
+          end
+        end
+        @samples << sample_info
+      end
 
     elsif @extended_type == PSSH_TYPE
       @system_id, @pssh_data_size = stream.guid, stream.ui32
@@ -1175,7 +1190,6 @@ class UuidBox < Box
       cputs "Overrides TrackEncryptionBox parameters: #{((@flags & 1) == 1) ? 'Yes' : 'No'}", :dark_gray
       print prefix
       cputs "Uses Subsample Encryption: #{((@flags & 2) == 2) ? 'Yes' : 'No'}", :dark_gray
-
       if (@flags & 1) == 1
         print prefix
         cputs "Algorithm ID: #{@algorithm_id} (#{ALGORITHM_TYPES[@algorithm_id] || 'Unknown'})", :dark_gray
@@ -1183,6 +1197,31 @@ class UuidBox < Box
         cputs "IV Size: #{@iv_size}", :dark_gray
         print prefix
         cputs "Key ID: #{@key_id}", :dark_gray
+      end
+      if @sample_count != @samples.length
+        print prefix
+        cputs "Sample count (#{@sample_count}) doesn't match number of samples found (#{@samples.length})!", :red
+      end
+      print prefix
+      cputs "Sample Count: #{@sample_count}", :dark_gray
+      if $VERBOSE
+        trun = parent.first_child('trun')
+
+        @samples.each_with_index do |sample, index|
+          print prefix
+          cputs ("Sample %2d IV: #{sample[:iv].unpack('H*').first}" % (index + 1)), :dark_gray
+
+          subsamples_total_size = 0
+          (sample[:subsamples] || []).each_with_index do |subsample, subindex|
+            subsamples_total_size += subsample[:bytes_clear_data] + subsample[:bytes_encrypted_data]
+            print prefix
+            cputs ("  Subsample %2d: bytes_clear = #{subsample[:bytes_clear_data]}, bytes_encrypted = #{subsample[:bytes_encrypted_data]}" % (subindex + 1)), :dark_gray
+          end
+          if trun && trun.entries[index] && trun.entries[index][:size].to_i > 0 && trun.entries[index][:size].to_i != subsamples_total_size
+            print prefix
+            cputs "  Subsamples size does not match trun entry size!", :red
+          end
+        end
       end
 
     elsif @extended_type == PSSH_TYPE
