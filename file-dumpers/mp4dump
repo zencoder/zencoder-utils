@@ -915,11 +915,17 @@ class SencBox < Box
     @version, @flags = stream.ui8, stream.ui24
     @sample_count = stream.ui32
 
-    @sample_count.times do |index|
-      sample_info = {}
+    if [8,16].include?(ENV['IV_SIZE'].to_i)
+      iv_size = ENV['IV_SIZE'].to_i
+    else
       # TODO: Assuming 8-byte IV here, but it could be 16-byte too.  Have to get
       # that data from 'tenc' box which could be in a separate init file.
-      sample_info[:iv] = stream.read(8)
+      iv_size = 8
+    end
+
+    @sample_count.times do |index|
+      sample_info = {}
+      sample_info[:iv] = stream.read(iv_size)
       if (@flags & 2) == 2
         sample_info[:subsamples] = []
         sample_info[:subsample_count] = stream.ui16
@@ -1129,11 +1135,17 @@ class UuidBox < Box
       end
       @sample_count = stream.ui32
 
-      @sample_count.times do |index|
-        sample_info = {}
+      if [8,16].include?(ENV['IV_SIZE'].to_i)
+        default_iv_size = ENV['IV_SIZE'].to_i
+      else
         # TODO: Assuming 8-byte IV here, but it could be 16-byte too.  Might have to get
         # that data from 'tenc' box which could be in a separate init file.
-        sample_info[:iv] = stream.read(@iv_size || 8)
+        default_iv_size = 8
+      end
+
+      @sample_count.times do |index|
+        sample_info = {}
+        sample_info[:iv] = stream.read(@iv_size || default_iv_size)
         if (@flags & 2) == 2
           sample_info[:subsamples] = []
           sample_info[:subsample_count] = stream.ui16
