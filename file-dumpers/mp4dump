@@ -2017,17 +2017,17 @@ class MfroBox < Box
   def initialize(*args)
     @version = nil
     @flags = nil
-    @size = nil
+    @mfra_size = nil
     super
   end
 
   def read_data(stream)
-    @version,@flags,@size = stream.ui8, stream.ui24, stream.ui32
+    @version,@flags,@mfra_size = stream.ui8, stream.ui24, stream.ui32
   end
 
   def print_extra_info(prefix = '')
     print prefix
-    cputs "Size: #{@size}", :dark_gray
+    cputs "mfra Size: #{@mfra_size}", :dark_gray
   end
 end
 
