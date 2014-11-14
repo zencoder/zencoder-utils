@@ -1402,7 +1402,7 @@ class SttsBox < Box
 end
 
 class CslgBox < Box
-  handles 'cslg', 'Composition Shift Info'
+  handles 'cslg', 'Composition Shift Least Greatest'
 
   attr_accessor :version, :flags
 
@@ -1855,10 +1855,12 @@ class ElstBox < Box
     # media times for these.  :(
     media_timescale = find_parent('trak').first_child('mdh').timescale rescue nil
 
+    total_duration = 0
+
     print prefix
     cputs "Entry Count: #{@entry_count}", :dark_gray
     @entries.each do |entry|
-      print prefix
+      total_duration += entry[:duration]
 
       extra = ''
       if movie_timescale
@@ -1869,7 +1871,13 @@ class ElstBox < Box
         end
       end
 
+      print prefix
       cputs "Duration: #{entry[:duration]}, Media Time: #{entry[:media_time]}, Media Rate: #{entry[:media_rate]}#{extra}", :dark_gray
+    end
+
+    if movie_timescale
+      print prefix
+      cputs("Total Duration: %0.3f seconds" % (total_duration.to_f / movie_timescale), :dark_gray)
     end
   end
 
