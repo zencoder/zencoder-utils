@@ -2045,33 +2045,60 @@ class SidxBox < Box
 
   def read_data(stream)
     @version,@flags = stream.ui8, stream.ui24
-    @reference_track_id = stream.ui32
+    @reference_id = stream.ui32
+    @timescale = stream.ui32
     if @version == 0
-      @earliest_composition_time = stream.ui32
+      @earliest_presentation_time = stream.ui32
+      @first_offset = stream.ui32
     else
-      @earliest_composition_time = stream.ui64
+      @earliest_presentation_time = stream.ui64
+      @first_offset = stream.ui64
     end
+    reserved = stream.ui16
     @reference_count = stream.ui16
     @reference_count.times do
       reference = {}
       fields = stream.ui32
       reference[:type] = fields >> 31
-      reference[:offset] = fields & ((2**31)-1)
+      reference[:size] = fields & ((2**31)-1)
       reference[:duration] = stream.ui32
       fields = stream.ui32
-      reference[:contains_rap] = fields >> 31               # "rap" = Random Access Point
-      reference[:rap_delta_time] = fields & ((2**31)-1)     # time of first rap, as offset from earliest composition time
+      reference[:starts_with_sap] = fields >> 31         # "sap" = Stream Access Point
+      reference[:sap_type] = (fields >> 28) & 7
+      reference[:sap_delta_time] = fields & ((2**28)-1)  # time of first sap, as offset from earliest presentation time
       @references << reference
     end
   end
 
   def print_extra_info(prefix = '')
     print prefix
-    cputs "Reference Track ID: #{@reference_track_id}", :dark_gray
+    cputs "Reference (Track/Stream) ID: #{@reference_id}", :dark_gray
     print prefix
-    cputs "Earliest Composition Time: #{@earliest_composition_time}", :dark_gray
+    cputs "Timescale: #{@timescale}", :dark_gray
+    print prefix
+    cputs "Earliest Presentation Time: #{@earliest_presentation_time}", :dark_gray
+    print prefix
+    cputs "First Offset: #{@first_offset}", :dark_gray
     print prefix
     cputs "Reference Count: #{@reference_count}", :dark_gray
+    if $VERBOSE
+      @references.each_with_index do |reference, index|
+        print prefix
+        cputs "Reference #{index}:", :dark_gray
+        print prefix
+        cputs "    Reference Type: #{reference[:type]}", :dark_gray
+        print prefix
+        cputs "    Referenced Size: #{reference[:size]}", :dark_gray
+        print prefix
+        cputs "    Subsegment Duration: #{reference[:duration]}", :dark_gray
+        print prefix
+        cputs "    Starts with SAP: #{reference[:starts_with_sap]}", :dark_gray
+        print prefix
+        cputs "    SAP Type: #{reference[:sap_type]}", :dark_gray
+        print prefix
+        cputs "    SAP Delta Time: #{reference[:sap_delta_time]}", :dark_gray
+      end
+    end
   end
 end
 
