@@ -2012,7 +2012,7 @@ end
 class MfroBox < Box
   handles 'mfro', 'Movie Fragment Random Access Offset'
 
-  attr_accessor :version, :flags, :size
+  attr_accessor :version, :flags, :mfra_size
 
   def initialize(*args)
     @version = nil
@@ -2028,6 +2028,50 @@ class MfroBox < Box
   def print_extra_info(prefix = '')
     print prefix
     cputs "mfra Size: #{@mfra_size}", :dark_gray
+  end
+end
+
+class SidxBox < Box
+  handles "sidx", "Segment Index"
+
+  attr_accessor :version, :flags, :reference_count, :references
+
+  def initialize(*args)
+    @version = nil
+    @flags = nil
+    @references = []
+    super
+  end
+
+  def read_data(stream)
+    @version,@flags = stream.ui8, stream.ui24
+    @reference_track_id = stream.ui32
+    if @version == 0
+      @earliest_composition_time = stream.ui32
+    else
+      @earliest_composition_time = stream.ui64
+    end
+    @reference_count = stream.ui16
+    @reference_count.times do
+      reference = {}
+      fields = stream.ui32
+      reference[:type] = fields >> 31
+      reference[:offset] = fields & ((2**31)-1)
+      reference[:duration] = stream.ui32
+      fields = stream.ui32
+      reference[:contains_rap] = fields >> 31               # "rap" = Random Access Point
+      reference[:rap_delta_time] = fields & ((2**31)-1)     # time of first rap, as offset from earliest composition time
+      @references << reference
+    end
+  end
+
+  def print_extra_info(prefix = '')
+    print prefix
+    cputs "Reference Track ID: #{@reference_track_id}", :dark_gray
+    print prefix
+    cputs "Earliest Composition Time: #{@earliest_composition_time}", :dark_gray
+    print prefix
+    cputs "Reference Count: #{@reference_count}", :dark_gray
   end
 end
 
