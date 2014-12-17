@@ -1,0 +1,45 @@
+#!/usr/bin/env ruby
+
+# Usage: ./file-dumpers/mp4dump ~/video-480p.fmp4 | ./file-dumpers/mp4dump2json > output.json
+
+require 'json'
+stream = $stdin
+output = Array.new
+
+last_location = -1 # Yeh, I'm lazy, get over it.
+stream.each do |line|
+  next if /^\|/ =~ line        # Strip non-top level boxes
+  next if /^\s*$/ =~ line      # Strip empty lines
+  matchdata = /^(.*?)\s.*at\s(\d+)\s\((\d+).*/.match(line)   # Extract box type, location, and size
+  # Check we extracted everything
+  if matchdata.captures.size < 3
+    $stderr.puts 'Found top level box which we could not extract Type, Size & Location from. Line was: ' + line
+    exit 1
+  end
+  type = matchdata.captures[0]
+  location = matchdata.captures[1].to_i
+  size = matchdata.captures[2].to_i
+
+  # Check the location of this box is going up
+  if location <= last_location
+    $stderr.puts "Halp"
+    exit 2
+  end
+
+  last_location = location
+  output << {'type' => type, 'location' => location, 'size' => size}
+end
+
+# Nothing in the output by the time we got here
+if output.empty?
+  $stderr.puts "Did not capture any root boxes."
+  exit 3
+end
+
+# First box wasn't an ftyp
+if output.first['type'] != 'ftyp'
+  $stderr.puts "First box was not a ftyp."
+  exit 4
+end
+
+puts JSON.pretty_generate(output)
