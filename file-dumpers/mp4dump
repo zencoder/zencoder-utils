@@ -200,6 +200,7 @@ end
 
 class FtypBox < Box
   handles 'ftyp', 'File Type'
+  handles 'styp', 'Segment Type'
 
   attr_accessor :major_brand, :minor_version, :compatible_brands
 
@@ -2084,19 +2085,7 @@ class SidxBox < Box
     if $VERBOSE
       @references.each_with_index do |reference, index|
         print prefix
-        cputs "Reference #{index}:", :dark_gray
-        print prefix
-        cputs "    Reference Type: #{reference[:type]}", :dark_gray
-        print prefix
-        cputs "    Referenced Size: #{reference[:size]}", :dark_gray
-        print prefix
-        cputs "    Subsegment Duration: #{reference[:duration]}", :dark_gray
-        print prefix
-        cputs "    Starts with SAP: #{reference[:starts_with_sap]}", :dark_gray
-        print prefix
-        cputs "    SAP Type: #{reference[:sap_type]}", :dark_gray
-        print prefix
-        cputs "    SAP Delta Time: #{reference[:sap_delta_time]}", :dark_gray
+        cputs "Reference #{index+1}: #{reference.to_s}", :dark_gray
       end
     end
   end
