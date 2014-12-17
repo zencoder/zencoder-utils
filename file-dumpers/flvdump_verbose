@@ -7,11 +7,11 @@
 def error(msg); puts msg; exit; end
 
 class IO
-  def ui8; read(1).unpack('C').first; end
-  def ui16; read(2).unpack('n').first; end
-  def ui32; read(4).unpack('N').first; end
-  def ui24; ("\000" + read(3)).unpack('N').first; end
-  def si24; v = ui24; v >= (2**23) ? v-(2**24) : v; end
+    def ui8; read(1).unpack('C').first; end
+    def ui16; read(2).unpack('S>').first; end
+    def ui24; ("\000" + read(3)).unpack('L>').first; end
+    def ui32; read(4).unpack('L>').first; end
+    def si24; ("\000" + read(3)).unpack('l>').first; end
 end
 
 class Bitstream
@@ -497,7 +497,7 @@ class AacFrameDecoder
 
     # CALCULATE VALUES USED FOR OTHER STUFF
     case window_sequence
-    when ONLY_LONG_SEQUENCE,LONG_START_SEQUENCE,LONG_STOP_SEQUENCE:
+    when ONLY_LONG_SEQUENCE,LONG_START_SEQUENCE,LONG_STOP_SEQUENCE
       num_windows = 1;
       num_window_groups = 1;
       window_group_length[num_window_groups-1] = 1;
@@ -509,7 +509,7 @@ class AacFrameDecoder
         @sect_sfb_offset[0][i] = SWB_OFFSET_LONG_WINDOW[@sample_rate][i];
         # swb_offset[i] = swb_offset_long_window[@sampling_freq_index][i];
       end
-    when EIGHT_SHORT_SEQUENCE:
+    when EIGHT_SHORT_SEQUENCE
       num_windows = 8;
       num_window_groups = 1;
       window_group_length[num_window_groups-1] = 1;
@@ -548,23 +548,23 @@ class AacFrameDecoder
   def extension_payload(count)
     extension_type = @data.getbits(4)
     case extension_type
-    when EXT_DYNAMIC_RANGE:
+    when EXT_DYNAMIC_RANGE
       puts "    Dynamic Range Data"
       raise "EXT_DYNAMIC_RANGE not yet supported!"
       # dynamic_range_info(@data)
-    when EXT_SBR_DATA:
+    when EXT_SBR_DATA
       puts "    SBR DATA!"
       raise "EXT_SBR_DATA not yet supported!"
       # sbr_extension_data(@data, id_aac, 0)
-    when EXT_SBR_DATA_CRC:
+    when EXT_SBR_DATA_CRC
       puts "    SBR DATA (CRC)!"
       raise "EXT_SBR_DATA_CRC not yet supported!"
       # sbr_extension_data(@data, id_aac, 1)
-    when EXT_DATA_ELEMENT: # from 14496-3, 2005 version
+    when EXT_DATA_ELEMENT # from 14496-3, 2005 version
       puts "    Data Element"
       raise "EXT_DATA_ELEMENT not yet supported!"
       
-    when EXT_FILL_DATA:
+    when EXT_FILL_DATA
       puts "    Extra Fill Data (#{count} bytes)"
       fill_nibble = @data.getbits(4) # Should be '0000'
       (count - 1).times { @data.getbits(8) } # Each should be '10100101'
@@ -583,12 +583,12 @@ class AacFrameDecoder
     se_id = @data.getbits(3)
     puts "  Syntax element: #{se_id} (#{SYNTAX_ELEMENT_NAMES[se_id]})"
     case se_id
-    when ID_SCE:
+    when ID_SCE
       instance_tag = @data.getbits(4)
       puts "    Instance tag: #{instance_tag}"
       individual_channel_stream(0)
       {}
-    when ID_CPE:
+    when ID_CPE
       instance_tag = @data.getbits(4)
       puts "    Instance tag: #{instance_tag}"
       common_window = @data.getbits(1)
@@ -604,19 +604,19 @@ class AacFrameDecoder
       individual_channel_stream(common_window)
       individual_channel_stream(common_window)
       {}
-    when ID_CCE:
+    when ID_CCE
       raise "CCE not yet supported."
       {}
-    when ID_LFE:
+    when ID_LFE
       raise "LFE not yet supported."
       {}
-    when ID_DSE:
+    when ID_DSE
       raise "DSE not yet supported."
       {}
-    when ID_PCE:
+    when ID_PCE
       raise "PCE not yet supported."
       {}
-    when ID_FIL:
+    when ID_FIL
       count = @data.getbits(4)
       if count == 15
         count += @data.getbits(8)
@@ -626,7 +626,7 @@ class AacFrameDecoder
         count -= extension_payload(count)
       end
       { :id => ID_FIL }
-    when ID_END:
+    when ID_END
       { :id => ID_END }
     else
       puts "  UNKNOWN SYNTAX ELEMENT: #{se_id}"
@@ -1388,7 +1388,7 @@ while more_to_read
     puts "  Video codec: #{codec_id} (#{video_codecs[codec_id] || 'unknown'})"
     
     if codec_id == 4 #&& frame_type == 1 # vp6 keyframe
-      stream_bytes = input_file.read(9)
+      stream_bytes = input_file.read(9).bytes.to_a
 
       vp6_frame_mode = (stream_bytes[1] >> 7) & 1
       vp6_q_param = (stream_bytes[1] >> 1) & 0b00111111
