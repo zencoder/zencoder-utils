@@ -30,9 +30,9 @@ stream.each do |line|
   output << {'type' => type, 'location' => location, 'size' => size}
 end
 
-# Nothing in the output by the time we got here
-if output.empty?
-  $stderr.puts "Did not capture any root boxes."
+# Didn't find a minimum of 2 root boxes (Hopefully a ftyp and a moov)
+if output.length < 2
+  $stderr.puts "Did not capture a minimum of 2 root boxes."
   exit 3
 end
 
