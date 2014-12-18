@@ -36,10 +36,16 @@ if output.empty?
   exit 3
 end
 
-# First box wasn't an ftyp
+# First box wasn't a ftyp
 if output.first['type'] != 'ftyp'
   $stderr.puts "First box was not a ftyp."
   exit 4
+end
+
+# Second box wasn't a moov
+if output[1]['type'] != 'moov'
+  $stderr.puts "Second box was not a moov."
+  exit 5
 end
 
 puts JSON.pretty_generate(output)
