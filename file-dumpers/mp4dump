@@ -1098,6 +1098,46 @@ class SchmBox < SubBox
   end
 end
 
+class PsshBox < Box
+  handles 'pssh', 'Protection System Specific Header'
+
+  attr_accessor :version, :flags, :scheme, :scheme_version
+
+  def initialize(*args)
+    @version = nil
+    @flags = nil
+    @system_id = nil
+    @key_ids = []
+    @pssh_data_size = nil
+    super
+  end
+
+  def read_data(stream)
+    @version,@flags = stream.ui8, stream.ui24
+    @system_id = stream.uuid
+    if @version > 0
+      kid_count = stream.ui32
+      kid_count.times do
+        @key_ids << stream.uuid
+      end
+    end
+    @pssh_data_size = stream.ui32
+  end
+  
+  def print_extra_info(prefix = '')
+    print prefix
+    cputs "System ID: #{@system_id}", :dark_gray
+    print prefix
+    cputs "Version: #{@version}", :dark_gray
+    @key_ids.each_with_index do |key_id, index|
+      print prefix
+      cputs "Key #{index + 1}: #{key_id}", :dark_gray
+    end
+    print prefix
+    cputs "Data Size: #{@pssh_data_size}", :dark_gray
+  end
+end
+
 class UuidBox < Box
   handles 'uuid', 'Extended Information'
 
