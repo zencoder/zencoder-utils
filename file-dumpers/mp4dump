@@ -401,7 +401,9 @@ class TkhdBox < Box
       print prefix
       cputs "Matrix stretches non-uniformly!", :yellow
     end
-    
+
+    track_is_enabled = (@flags & 1) > 0
+
     if $VERBOSE
       print prefix
       cputs "Matrix: [#{@matrix_ABCD[0]}, #{@matrix_ABCD[1]}, x]", :dark_gray
@@ -409,8 +411,6 @@ class TkhdBox < Box
       cputs "        [#{@matrix_ABCD[2]}, #{@matrix_ABCD[3]}, x]", :dark_gray
       print prefix
       cputs "        [  x,   x, x]", :dark_gray
-      print prefix
-      cputs "Enabled: #{(@flags & 1) > 0 ? 'Yes' : 'No'}", :dark_gray
       print prefix
       cputs "In Movie: #{(@flags & 2) > 0 ? 'Yes' : 'No'}", :dark_gray
       print prefix
@@ -421,6 +421,14 @@ class TkhdBox < Box
       cputs "Layer: #{@layer}", :dark_gray
       print prefix
       cputs "Volume: #{@volume}", :dark_gray
+    end
+
+    if !track_is_enabled
+      print prefix
+      cputs "Enabled: #{track_is_enabled ? 'Yes' : 'No'}", :red  # Red, because it's important!
+    elsif $VERBOSE
+      print prefix
+      cputs "Enabled: #{track_is_enabled ? 'Yes' : 'No'}", :dark_gray
     end
   end
 end
