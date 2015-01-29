@@ -1937,6 +1937,7 @@ class Mp4aSubBox < SubBoxWithSubBoxes
   handles 'sowt', 'SOWT Audio Description'
   handles 'twos', 'TWOS Audio Description'
   handles 'aace', 'AACE Audio Description'
+  handles 'lpcm', 'Linear PCM Audio Description'
 
   handles 'enca', 'Encrypted Audio Description'
 
