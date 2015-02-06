@@ -5,7 +5,7 @@
 #
 
 $:.unshift(File.dirname(__FILE__))
-require 'dump_helpers'
+require_relative './file-dumpers/dump_helpers'
 
 tag_kinds = {
   8 => 'audio',
