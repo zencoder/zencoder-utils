@@ -1,0 +1,88 @@
+#!/usr/bin/env ruby
+
+#
+# FLV timestamp checker
+#
+
+$:.unshift(File.dirname(__FILE__))
+require_relative './file-dumpers/dump_helpers'
+
+tag_kinds = {
+  8 => 'audio',
+  9 => 'video',
+  18 => 'script'
+}
+
+error "Please specify a file to inspect." unless ARGV.length > 0
+
+input_filename = ARGV.first
+error "Input file not found." unless File.exist?(input_filename)
+
+file_size = File.size(input_filename)
+input_file = File.open(input_filename)
+
+signature = input_file.read(3)
+error "Not an FLV file." unless signature == 'FLV'
+
+puts
+puts "INFO:"
+puts "Filename: " + File.basename(input_filename)
+puts "Size: #{file_size}"
+
+puts
+puts "HEADER:"
+
+version = input_file.ui8
+puts "Version: #{version}"
+
+flags = input_file.ui8
+puts "Has audio tags: " + ((flags & 0x4 > 0) ? 'yes' : 'no')
+puts "Has video tags: " + ((flags & 0x1 > 0) ? 'yes' : 'no')
+if (flags & 0b11111010) > 0
+  puts "WARNING: reserved flag bits are not zero!"
+end
+
+data_loc = input_file.ui32
+puts "Data offset: #{data_loc}"
+
+puts
+
+more_to_read = true
+last_full_timestamp = 0
+
+while more_to_read
+
+  prev_tag_size = input_file.ui32
+
+  if input_file.eof?
+    more_to_read = false
+    next
+  end
+
+  kind = input_file.ui8
+  size = input_file.ui24
+  timestamp = input_file.ui24
+  timestamp_ext = input_file.ui8
+  full_timestamp = timestamp_ext*(2**24) + timestamp
+  stream_id = input_file.ui24
+
+  if (full_timestamp < last_full_timestamp)
+    puts "NON monotonically increasing tag found! (Last Timestamp: #{last_full_timestamp})"
+    kind_name = tag_kinds[kind] || 'unknown'
+    puts "TAG: (offset #{input_file.pos})"
+    puts "  Type: #{kind} (#{kind_name})"
+    puts "  Timestamp: #{full_timestamp}"
+    puts "  Time: #{full_timestamp / 1000.0}"
+    puts
+  end
+
+  last_full_timestamp = full_timestamp
+
+  input_file.read(size)
+
+  next if size == 0
+
+end
+
+puts
+close(input_file) rescue nil
