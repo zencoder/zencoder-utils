@@ -1,0 +1,1494 @@
+#!/usr/bin/env ruby
+
+#
+# MP4 Dump
+#
+
+$:.unshift(File.dirname(__FILE__))
+require 'dump_helpers'
+require 'zlib'
+require 'base64'
+
+
+class BoxFile
+  attr_accessor :boxes
+
+  def initialize(data_stream, base_offset = 0)
+    @data = data_stream
+    @boxes = []
+  end
+
+  def parse
+    while (box = Box.read(@data))
+      boxes << box
+      break if box.size == 0 # Zero size means it extends to the end of the file.
+      break if !box.valid
+    end
+    self
+  end
+
+  def print_tree
+    puts
+    @boxes.each { |box| box.print_tree }
+    if @boxes.length == 0
+      puts "Empty Tree!"
+    end
+    puts
+  end
+end
+
+class Box
+  attr_accessor :base_offset, :kind, :size, :data_size
+  attr_accessor :data_offset, :data, :data_stream, :parent, :children, :valid
+
+  # Register each box kind with what handles it.
+  HANDLERS = {}
+  DESCRIPTIONS = {}
+  def self.handles(kind, description = nil)
+    Box::HANDLERS[kind] = self
+    Box::DESCRIPTIONS[kind] = description
+  end
+
+  def self.read(stream, options = {})
+    size,kind = stream.ui32,stream.fourcc rescue nil
+
+    # Sometimes metatdata gets confusing, so skip leading zero chunks.
+    while size == 0
+      size = kind.unpack('N').first
+      kind = stream.fourcc
+    end
+    return nil if size.nil?
+
+    handler = Box::HANDLERS[kind] || Box
+    handler.new(stream, kind, size, options)
+  end
+
+  def initialize(stream, kind, size, options = {})
+    # Handle extended header sizes
+    if size == 1
+      size = stream.ui64
+      header_size = 16
+    else
+      header_size = 8
+    end
+    @data_offset = stream.pos
+    @base_offset = @data_offset - header_size
+    # puts "DEBUG: Found #{kind} box at #{@base_offset} with size of #{size}"
+    @kind = kind
+    @size = size
+    @data_size = size - header_size
+    @data = nil
+    @children = []
+    @parent = options[:parent]
+    read_data(stream)
+
+    # Make sure to read in any trailing junk data.
+    if stream.pos < @base_offset + @size
+      stream.seek(@base_offset + @size)
+    end
+
+    @valid = true
+  rescue => e
+    STDERR.puts e.inspect
+    STDERR.puts "  " + e.backtrace.join("\n  ")
+  end
+
+  def read_data(stream)
+    # stream.seek(@data_size, IO::SEEK_CUR)
+  end
+
+  def description
+    Box::DESCRIPTIONS[@kind]
+  end
+
+  def print_tree(prefix = '')
+    color = :cyan
+    if @children.length > 0
+      color = :yellow
+    elsif @parent.nil?
+      color = :green
+    end
+    print prefix
+    cprint @kind, color
+    cprint(" - " + description, color) if description
+    puts " at #{@base_offset} (#{@size} bytes)"
+    print_extra_info(prefix + '|   ')
+    @children.each { |box| box.print_tree(prefix + '|   ') }
+  end
+
+  def print_extra_info(prefix = '')
+  end
+
+  def find_parent(parent_kind)
+    return self if @kind == parent_kind
+    return nil if @parent.nil?
+    return @parent.find_parent(parent_kind)
+  end
+
+  def first_child(child_kind)
+    @children.detect { |c| c.kind == child_kind }
+  end
+
+  def print_sample_flags(flags, prefix = '')
+    value_names = ['Unknown','Yes',' No','Invalid/Reserved']
+
+    sample_depends_on = (flags >> 24) & 3
+    sample_is_depended_on = (flags >> 22) & 3
+    sample_has_redundancy = (flags >> 20) & 3
+    sample_padding_value = (flags >> 17) & 7
+    sample_is_difference_sample = (flags >> 16) & 1
+    sample_degradation_priority = flags & 0xffff
+
+    print prefix
+    cputs "Depends on others: #{value_names[sample_depends_on]}", :dark_gray
+    print prefix
+    cputs "Depdended on by others: #{value_names[sample_is_depended_on]}", :dark_gray
+    print prefix
+    cputs "Has redundancy: #{value_names[sample_has_redundancy]}", :dark_gray
+    print prefix
+    cputs "Padding value: #{sample_padding_value}", :dark_gray
+    print prefix
+    cputs "Is difference sample (not key/sync): #{sample_is_difference_sample == 1 ? 'Yes' : 'No'}", :dark_gray
+    print prefix
+    cputs "Degradation Priority: #{sample_degradation_priority}", :dark_gray
+  end
+end
+
+class BoxWithChildren < Box
+  handles 'moov', 'Movie'
+  handles 'cmov', 'Compressed Movie'
+  handles 'trak', 'Track'
+  handles 'mdia', 'Media'
+  handles 'minf', 'Media Information'
+  handles 'dinf', 'Data Information'
+  handles 'stbl', 'Sample Table'
+  handles 'tapt', 'Track Aperture Mode Dimensions'
+  handles 'edts', 'Edits'
+
+  handles 'mvex', 'Movie Extends'
+  handles 'moof', 'Movie Fragment'
+  handles 'traf', 'Track Fragment'
+  handles 'mfra', 'Movie Fragment Random Access'
+  handles 'udta', 'User Data'
+  handles 'encv', 'Encrypted Video'
+
+  def read_data(stream)
+    while stream.pos < (@base_offset + @size - 7) && (box = Box.read(stream, :parent => self))
+      @children << box
+    end
+
+    remainder = (@base_offset + @size) - stream.pos
+    stream.read(remainder) if remainder > 0
+  end
+end
+
+class CmvdBox < Box
+  handles 'cmvd', 'Compressed Movie Data'
+
+  attr_accessor :uncompressed_size
+
+  def read_data(stream)
+    @uncompressed_size = stream.ui32
+    uncompressed_data = Zlib::Inflate.inflate(stream.read(@data_size - 4)) #rescue nil
+    if uncompressed_data
+      child_file = BoxFile.new(StringIO.new(uncompressed_data)).parse
+      @children = child_file.boxes
+    end
+  end
+
+end
+
+class FtypBox < Box
+  handles 'ftyp', 'File Type'
+  handles 'styp', 'Segment Type'
+
+  attr_accessor :major_brand, :minor_version, :compatible_brands
+
+  def initialize(*args)
+    @compatible_brands = []
+    super
+  end
+
+  def read_data(stream)
+    @major_brand = stream.fourcc
+    @minor_version = stream.ui32
+    ((@data_size - 8) / 4).times do
+      @compatible_brands << stream.fourcc
+    end
+  end
+
+  def print_extra_info(prefix = '')
+    print prefix
+    cputs "Brand: #{@major_brand}, Version: #{@minor_version}", :dark_gray
+    @compatible_brands.each do |cb|
+      print prefix
+      cputs "Compatible Brand: #{cb}", :dark_gray
+    end
+  end
+end
+
+class MvhdBox < Box
+  handles 'mvhd', 'Movie Header'
+
+  attr_accessor :timescale, :duration, :play_rate, :play_volume
+
+  def read_data(stream)
+    version = stream.ui8
+    @flags = stream.ui24
+    if version == 1
+      ctime = stream.ui64 # Seconds since Jan 1, 1904
+      mtime = stream.ui64 # Seconds since Jan 1, 1904
+      @timescale = stream.ui32 # Yeah, still 32.
+      @duration = stream.ui64
+    else
+      ctime = stream.ui32 # Seconds since Jan 1, 1904
+      mtime = stream.ui32 # Seconds since Jan 1, 1904
+      @timescale = stream.ui32
+      @duration = stream.ui32
+    end
+    @play_rate = stream.fixed32
+    @play_volume = stream.fixed16
+    stream.read(10) # Reserved
+    matrix = stream.read(36)
+    preview_start = stream.ui32
+    preview_duration = stream.ui32
+    poster_time = stream.ui32
+    selection_start = stream.ui32
+    selection_duration = stream.ui32
+    playhead = stream.ui32
+    next_track_id = stream.ui32
+  end
+
+  def print_extra_info(prefix = '')
+    print prefix
+    cputs "Timescale: #{@timescale}", :dark_gray
+    print prefix
+    if @timescale > 0
+      cputs "Duration: #{@duration} (#{sprintf('%0.3f',@duration.to_f / @timescale)} seconds)", :dark_gray
+    else
+      cputs "Duration: #{@duration}", :dark_gray
+    end
+    print prefix
+    cputs "Play Rate: #{@play_rate}", :dark_gray
+    print prefix
+    cputs "Play Volume: #{@play_volume}", :dark_gray
+  end
+end
+
+class MfhdBox < Box
+  handles 'mfhd', 'Movie Fragment Header'
+
+  attr_accessor :sequence_number
+
+  def read_data(stream)
+    version = stream.ui8
+    flags = stream.ui24
+    @sequence_number = stream.ui32
+  end
+
+  def print_extra_info(prefix = '')
+    print prefix
+    cputs "Sequence Number: #{@sequence_number}", :dark_gray
+  end
+end
+
+class TkhdBox < Box
+  handles 'tkhd', 'Track Header'
+
+  attr_accessor :flags, :track_id, :duration, :layer, :volume, :width, :height
+
+  MATRIX_DECODER = {
+    # [A, B, C, D] of QT matrix.  If it doesn't match one
+    # of these patterns, it's probably a weird rotation angle or something.
+    [ 1,  0,  0,  1] => { :rotate =>   0, :flip => :none },
+    [ 1,  0,  0, -1] => { :rotate =>   0, :flip => :vertical },
+    [ 0,  1, -1,  0] => { :rotate =>  90, :flip => :none },
+    [ 0,  1,  1,  0] => { :rotate =>  90, :flip => :horizontal },
+    [-1,  0,  0, -1] => { :rotate => 180, :flip => :none },
+    [-1,  0,  0,  1] => { :rotate => 180, :flip => :vertical }, # Equivalent to just a horizontal flip.
+    [ 0, -1,  1,  0] => { :rotate => 270, :flip => :none },
+    [ 0, -1, -1,  0] => { :rotate => 270, :flip => :horizontal }
+  }
+
+  def read_data(stream)
+    version = stream.ui8
+    @flags = stream.ui24
+    if version == 1
+      ctime = stream.ui64 # Seconds since Jan 1, 1904
+      mtime = stream.ui64 # Seconds since Jan 1, 1904
+      @track_id = stream.ui32
+      reserved = stream.read(4)
+      @duration = stream.ui64
+    else
+      ctime = stream.ui32 # Seconds since Jan 1, 1904
+      mtime = stream.ui32 # Seconds since Jan 1, 1904
+      @track_id = stream.ui32
+      reserved = stream.read(4)
+      @duration = stream.ui32
+    end
+    reserved = stream.read(8)
+    @layer = stream.si16
+    alt_group = stream.ui16
+    @volume = stream.fixed16
+    reserved = stream.read(2)
+    @matrix = stream.read(36)
+    @width = stream.fixed32
+    @height = stream.fixed32
+
+    # MATRIX DECODING
+    # -> 4 bytes decimal window geometry matrix value A
+    #    = long fixed point width scale (normal = 1.0)
+    # -> 4 bytes decimal window geometry matrix value B
+    #    = long fixed point width rotate (normal = 0.0)
+    # -> 4 bytes decimal window geometry matrix value U
+    #    = long fixed point width angle (restricted to 0.0)
+    # -> 4 bytes decimal window geometry matrix value C
+    #    = long fixed point height rotate (normal = 0.0)
+    # -> 4 bytes decimal window geometry matrix value D
+    #    = long fixed point height scale (normal = 1.0)
+    # -> 4 bytes decimal window geometry matrix value V
+    #    = long fixed point height angle (restricted to 0.0)
+    # -> 4 bytes decimal window geometry matrix value X
+    #    = long fixed point positon (left = 0.0)
+    # -> 4 bytes decimal window geometry matrix value Y
+    #    = long fixed point positon (top = 0.0)
+    # -> 4 bytes decimal window geometry matrix value W
+    #    = long fixed point divider scale (restricted to 1.0)
+
+    # Matrix rotation = atan2(b, a)*180/3.14159
+    # Vertical flip before rotate unless (atan2(d, c)*180/3.14159 - 90) is equal to rotation.  (beware float math)
+
+    # Decode the 4 matrix positions we care about.
+    @matrix_ABCD = []
+    [0,4,12,16].each do |byte_position|
+      @matrix_ABCD << @matrix[byte_position,4].unpack('cCCC').inject(0) { |s,v| (s<<8) + v }.to_f / 2**16
+    end
+
+    # Simplify to just -1, 0, and 1 representing negative/positive/zero values.
+    @matrix_simplified = @matrix_ABCD.map { |v| (v > 0.01) ? 1 : ((v < -0.01) ? -1 : 0) }
+
+    # If any values are not zero or 1, then it stretches stuff.
+    @matrix_stretches = @matrix_ABCD.any? { |v| ![-1.0, 0.0, 1.0].include?(v) }
+    
+    decoded = MATRIX_DECODER[@matrix_simplified]
+    if decoded
+      @rotation = decoded[:rotate]
+      @flip = decoded[:flip]
+    else
+      @rotation = 'Unknown'
+      @flip = 'Unknown'
+    end
+  end
+
+  def print_extra_info(prefix = '')
+    print prefix
+    cputs "Track ID: #{@track_id}", :dark_gray
+    print prefix
+    cputs "Duration: #{@duration}", :dark_gray
+    print prefix
+    cputs "Width: #{@width}", :dark_gray
+    print prefix
+    cputs "Height: #{@height}", :dark_gray
+    if @rotation != 0
+      print prefix
+      cputs "Rotate: #{@rotation}", :dark_gray
+    end
+    if @flip != :none
+      print prefix
+      cputs "Flip: #{@flip}", :dark_gray
+    end
+    if @matrix_stretches
+      print prefix
+      cputs "Matrix stretches non-uniformly!", :yellow
+    end
+
+    track_is_enabled = (@flags & 1) > 0
+
+    if $VERBOSE
+      print prefix
+      cputs "Matrix: [#{@matrix_ABCD[0]}, #{@matrix_ABCD[1]}, x]", :dark_gray
+      print prefix
+      cputs "        [#{@matrix_ABCD[2]}, #{@matrix_ABCD[3]}, x]", :dark_gray
+      print prefix
+      cputs "        [  x,   x, x]", :dark_gray
+      print prefix
+      cputs "In Movie: #{(@flags & 2) > 0 ? 'Yes' : 'No'}", :dark_gray
+      print prefix
+      cputs "In Preview: #{(@flags & 4) > 0 ? 'Yes' : 'No'}", :dark_gray
+      print prefix
+      cputs "In Poster: #{(@flags & 8) > 0 ? 'Yes' : 'No'}", :dark_gray
+      print prefix
+      cputs "Layer: #{@layer}", :dark_gray
+      print prefix
+      cputs "Volume: #{@volume}", :dark_gray
+    end
+
+    if !track_is_enabled
+      print prefix
+      cputs "Enabled: #{track_is_enabled ? 'Yes' : 'No'}", :red  # Red, because it's important!
+    elsif $VERBOSE
+      print prefix
+      cputs "Enabled: #{track_is_enabled ? 'Yes' : 'No'}", :dark_gray
+    end
+  end
+end
+
+class MehdBox < Box
+  handles 'mehd', 'Movie Extends Header'
+
+  attr_accessor :version, :flags, :fragment_duration
+  def read_data(stream)
+    @version, @flags = stream.ui8, stream.ui24
+
+    if @version == 1
+      @fragment_duration = stream.si64
+    else
+      @fragment_duration = stream.si32
+    end
+  end
+
+  def print_extra_info(prefix = '')
+    print prefix
+    cputs "Fragment Duration: #{@fragment_duration}", :dark_gray
+  end
+end
+
+class TrexBox < Box
+  handles 'trex', 'Track Extends'
+
+  attr_accessor :version, :flags, :track_id
+  attr_accessor :default_sample_description_index, :default_sample_duration, :default_sample_size, :default_sample_flags
+  def read_data(stream)
+    @version, @flags = stream.ui8, stream.ui24
+
+    @track_id = stream.ui32
+    @default_sample_description_index = stream.ui32
+    @default_sample_duration = stream.ui32
+    @default_sample_size = stream.ui32
+    @default_sample_flags = stream.ui32
+  end
+
+  def print_extra_info(prefix = '')
+    print prefix
+    cputs "Track ID: #{@track_id}", :dark_gray
+    print prefix
+    cputs "Default Sample Description Index: #{@default_sample_description_index}", :dark_gray
+    print prefix
+    cputs "Default Sample Duration: #{@default_sample_duration}", :dark_gray
+    print prefix
+    cputs "Default Sample Size: #{@default_sample_size}", :dark_gray
+    print prefix
+    cputs "Default Sample Flags: #{@default_sample_flags}", :dark_gray
+    print_sample_flags(@default_sample_flags, prefix + '  ') if $VERBOSE
+  end
+end
+
+class TfhdBox < Box
+  handles 'tfhd', 'Track Fragment Header'
+
+  attr_accessor :flags, :track_id, :duration, :layer, :volume, :width, :height
+
+  def read_data(stream)
+    version = stream.ui8
+    @flags = stream.ui24
+    @base_data_offset_present = @flags & 0x01
+    @sample_desc_index_present = @flags & 0x02
+    @default_sample_duration_present = @flags & 0x08
+    @default_sample_size_present = @flags & 0x10
+    @default_sample_flags_present = @flags & 0x20
+    @duration_is_empty = @flags & 0x010000
+
+    @track_id = stream.ui32
+    @base_data_offset = stream.ui64 if @base_data_offset_present > 0
+    @sample_desc_index = stream.ui32 if @sample_desc_index_present > 0
+    @default_sample_duration = stream.ui32 if @default_sample_duration_present > 0
+    @default_sample_size = stream.ui32 if @default_sample_size_present > 0
+    @default_sample_flags = stream.ui32 if @default_sample_flags_present > 0
+  end
+
+  def print_extra_info(prefix = '')
+    print prefix
+    cputs "Track ID: #{@track_id}", :dark_gray
+    if @base_data_offset_present > 0
+      print prefix
+      cputs "Base Data Offset: #{@base_data_offset}", :dark_gray
+    end
+    if @sample_desc_index_present > 0
+      print prefix
+      cputs "Sample Description Index: #{@sample_desc_index}", :dark_gray
+    end
+    if @default_sample_duration_present > 0
+      print prefix
+      cputs "Default Sample Duration: #{@default_sample_duration}", :dark_gray
+    end
+    if @default_sample_size_present > 0
+      print prefix
+      cputs "Default Sample Size: #{@default_sample_size}", :dark_gray
+    end
+    if @default_sample_flags_present > 0
+      print prefix
+      cputs "Default Sample Flags: #{@default_sample_flags}", :dark_gray
+      print_sample_flags(@default_sample_flags, prefix + '  ') if $VERBOSE
+    end
+    print prefix
+    cputs "Duration is Empty?: #{@duration_is_empty > 0 ? 'Yes' : 'No'}", :dark_gray
+  end
+end
+
+class TfdtBox < Box
+  handles 'tfdt', 'Track Fragment Base Media Decode Time'
+
+  attr_accessor :version, :flags, :base_media_decode_time
+  def read_data(stream)
+    @version, @flags = stream.ui8, stream.ui24
+
+    if @version == 1
+      @base_media_decode_time = stream.si64
+    else
+      @base_media_decode_time = stream.si32
+    end
+  end
+
+  def print_extra_info(prefix = '')
+    print prefix
+    cputs "Base Media Decode Time: #{@base_media_decode_time}", :dark_gray
+  end
+end
+
+class TrunBox < Box
+  handles 'trun', 'Track Fragment Run Box'
+
+  attr_accessor :flags, :data_offset, :first_sample_flags, :entry_count, :entries
+
+  def read_data(stream)
+    version = stream.ui8
+    @flags = stream.ui24
+
+    @data_offset_present = @flags & 0x01
+    @first_sample_flags_present = @flags & 0x04
+    @sample_duration_present = @flags & 0x0100
+    @sample_size_present = @flags & 0x0200
+    @sample_flags_present = @flags & 0x0400
+    @sample_composition_time_offsets_present = @flags & 0x0800
+    @duration_is_empty = @flags & 0x010000
+
+    @entry_count = stream.ui32
+    @data_offset = stream.si32 if @data_offset_present > 0
+    @first_sample_flags = stream.ui32 if @first_sample_flags_present > 0
+
+    @entries = []
+    @entry_count.times do
+      entry = {}
+      entry[:duration] = stream.ui32 if @sample_duration_present > 0
+      entry[:size] = stream.ui32 if @sample_size_present > 0
+      entry[:flags] = stream.ui32 if @sample_flags_present > 0
+      entry[:composition_time_offset] = stream.si32 if @sample_composition_time_offsets_present > 0
+      @entries << entry
+    end
+  end
+
+  def print_extra_info(prefix = '')
+    if @data_offset_present > 0
+      print prefix
+      cputs "Data Offset: #{@data_offset}", :dark_gray
+    end
+    print prefix
+    cputs "Sample Count: #{@entry_count}", :dark_gray
+
+    if $VERBOSE
+      @entries.each do |entry|
+        print prefix
+        cputs "Entry Info: #{entry.inspect}", :dark_gray
+      end
+    end
+  end
+end
+
+class MdhdBox < Box
+  handles 'mdhd', 'Media Header'
+
+  attr_accessor :version, :flags, :creation_time, :modification_time, :timescale, :duration, :language
+
+  def initialize(*args)
+    @version = nil
+    @flags = nil
+    super
+  end
+
+  def read_data(stream)
+    @version,@flags = stream.ui8, stream.ui24
+    if @version == 1
+      @creation_time = stream.ui64
+      @modification_time = stream.ui64
+      @timescale = stream.ui32
+      @duration = stream.ui64
+    else
+      @creation_time = stream.ui32
+      @modification_time = stream.ui32
+      @timescale = stream.ui32
+      @duration = stream.ui32
+    end
+
+    # Language is coded with 5 bits per char: [0 11111 11111 11111], and each char is an offset from 0x60
+    language_bits = stream.ui16
+    @language = [10,5,0].map { |s| ((language_bits >> s) & 0x1f) + 0x60 }.pack('c3')
+  end
+
+  def print_extra_info(prefix = '')
+    print prefix
+    cputs "Timescale: #{@timescale}", :dark_gray
+    print prefix
+    if @timescale > 0
+      cputs "Duration: #{@duration} (#{sprintf('%0.3f',@duration.to_f / @timescale)} seconds)", :dark_gray
+    else
+      cputs "Duration: #{@duration}", :dark_gray
+    end
+    if @language != 'und'
+      print prefix
+      cputs "Language: #{@language}", :dark_gray
+    end
+  end
+end
+
+class HdlrBox < Box
+  handles 'hdlr', 'Handler Description'
+
+  attr_accessor :version, :flags, :handler_type, :handler_manufacturer, :name, :handler_qt_type
+
+  def initialize(*args)
+    @version = nil
+    @flags = nil
+    super
+  end
+
+  def read_data(stream)
+    @version,@flags = stream.ui8, stream.ui24
+    @handler_qt_type = stream.fourcc
+    @handler_type = stream.fourcc
+    @handler_manufacturer = stream.fourcc
+    reserved2_2 = stream.ui32
+    reserved2_3 = stream.ui32
+    if @data_size > 24
+      @name = stream.read(@data_size - 24)
+      @name.sub(/\x00.*\Z/, '') # Remove null terminator and anything following.
+    end
+  end
+
+  def print_extra_info(prefix = '')
+    if @handler_qt_type[0,1].unpack('C').first > 0
+      print prefix
+      cputs "Handler QuickTime Type: #{@handler_qt_type}", :dark_gray
+    end
+    print prefix
+    cputs "Handler Type: #{@handler_type}", :dark_gray
+    if @handler_manufacturer[0,1].unpack('C').first > 0
+      print prefix
+      cputs "Handler Manufacturer: #{@handler_manufacturer}", :dark_gray
+    end
+    if @name
+      print prefix
+      cputs "Name: #{@name}", :dark_gray
+    end
+  end
+end
+
+class TaptChildBox < Box
+  handles 'clef', 'Track Clean Aperture Dimensions'
+  handles 'prof', 'Track Production Aperture Dimensions'
+  handles 'enof', 'Track Encoded Pixels Dimensions'
+
+  def read_data(stream)
+    stream.read(4) # Version and flags -- format unknown
+    @width, @height = stream.fixed32, stream.fixed32
+  end
+
+  def print_extra_info(prefix = '')
+    print prefix
+    cputs "Width: #{@width}", :dark_gray
+    print prefix
+    cputs "Height: #{@height}", :dark_gray
+  end
+end
+
+class SubBox < Box
+  # Register each box kind with what handles it.
+  HANDLERS = {}
+  DESCRIPTIONS = {}
+  def self.handles(kind, description = nil)
+    SubBox::HANDLERS[kind] = self
+    SubBox::DESCRIPTIONS[kind] = description
+  end
+
+  def self.read(stream, options = {})
+    size,kind = stream.ui32,stream.fourcc rescue nil
+    return nil if size.nil? || size < 1
+    handler = SubBox::HANDLERS[kind] || SubBox
+    handler.new(stream, kind, size, options)
+  end
+
+  def read_data(stream)
+    @data = stream.read(@data_size)
+    @data_stream = StringIO.new(@data)
+    read_header_data(@data_stream) if @data
+  end
+
+  def read_header_data(stream)
+  end
+
+  def description
+    SubBox::DESCRIPTIONS[@kind]
+  end
+
+  def print_tree(prefix = '')
+    color = :dark_cyan
+    if @children.length > 0
+      color = :dark_yellow
+    elsif @parent.nil?
+      color = :dark_green
+    end
+    print prefix + '('
+    cprint @kind, color
+    cprint(" - " + description, color) if description
+    puts ") at #{@base_offset} (#{@size} bytes)"
+    print_extra_info(prefix + '|   ')
+    @children.each { |box| box.print_tree(prefix + '|   ') }
+  end
+end
+
+class BoxWithSubBoxes < BoxWithChildren
+  handles 'ilst', "The iTunes/iPod Container Box"
+
+  def read_data(stream)
+    @data = stream.read(@data_size)
+    @data_stream = StringIO.new(@data)
+
+    read_header_data(@data_stream) if @data
+
+    while (@data_stream.pos + 1) < (@data_stream.length) && (box = SubBox.read(@data_stream, :parent => self))
+      @children << box
+    end
+  end
+
+  def read_header_data(stream)
+    # No default header data.
+  end
+end
+
+class SubBoxWithSubBoxes < SubBox
+  handles 'wave', 'Wave Audio Description'
+  handles "----", "iTunes Freeform Metadata"
+  handles "\xA9too", "Encoding Tool"
+  handles 'sinf', 'Protection Scheme Info'
+  handles 'schi', 'Scheme Information'
+
+  def read_data(stream)
+    @data = stream.read(@data_size)
+    @data_stream = StringIO.new(@data)
+
+    @content_is_tags = (@data_size >= 3 && @data[0,3] == [0x03,0x80,0x80].pack('C*'))
+
+    if @content_is_tags
+      parse_tags
+    else
+      read_header_data(@data_stream) if @data
+
+      while (@data_stream.pos + 1) < (@data_stream.length) && (box = SubBox.read(@data_stream, :parent => self))
+        @children << box
+      end
+    end
+  end
+
+  def print_extra_info(prefix = '')
+    return unless @content_is_tags
+    print prefix
+    cputs "Object Type: #{@object_type}", :dark_gray
+    print prefix
+    cputs "Bitrate: #{@bitrate}", :dark_gray
+    print prefix
+    cputs "Max Bitrate: #{@max_bitrate}", :dark_gray
+  end
+
+  def read_header_data(stream)
+    # No default header data.
+  end
+
+  def parse_tags(data_size = @data_size)
+    while @data_stream.pos < data_size
+      kind = @data_stream.ui8
+      len = read_desc_length
+
+      return if len == 0
+
+      case kind
+      when 3 # es_descr_tag -- has subitems.
+        # 3 bytes are esid and stream priority
+        @data_stream.read(3)
+        parse_tags(len - 3)
+      when 4 # decoder_config_descr_tag -- the one we want.
+        @object_type = @data_stream.ui8
+        @data_stream.ui32 # Unknown
+        @max_bitrate = @data_stream.ui32
+        @bitrate = @data_stream.ui32
+        if len > 8
+          @data_stream.read(len - 8)
+        end
+      when 5 # dec_specific_info_tag -- not useful
+        @data_stream.read(len)
+      when 6 # sl_config_descr_tag -- not useful
+        @data_stream.read(len)
+      else # who knows
+        @data_stream.read(len)
+      end
+
+    end
+  end
+
+  def read_desc_length
+    length = 0
+    4.times do
+      b = @data_stream.ui8
+      length = (length << 7) + (b & 127)
+      return length if b < 128
+    end
+    return length
+  rescue
+    0
+  end
+end
+
+class FrmaBox < SubBox
+  handles 'frma', 'Original Format'
+
+  attr_accessor :format
+
+  def read_data(stream)
+    @format = stream.fourcc
+  end
+
+  def print_extra_info(prefix = '')
+    print prefix
+    cputs "Format: #{@format}", :dark_gray
+  end
+end
+
+class TencBox < SubBox
+  handles 'tenc', 'Track Encryption'
+
+  attr_accessor :version, :flags, :is_encrypted, :iv_length, :key_id
+
+  def initialize(*args)
+    @version = nil
+    @flags = nil
+    @is_encrypted = nil
+    @iv_length = nil
+    @key_id = nil
+    super
+  end
+
+  def read_data(stream)
+    @version, @flags = stream.ui8, stream.ui24
+    @is_encrypted = stream.ui24
+    @iv_size = stream.ui8
+    @key_id = stream.read(16)
+  end
+
+  def print_extra_info(prefix = '')
+    print prefix
+    cputs "Is Encrypted?: #{(@is_encrypted == 1) ? 'Yes' : 'No'}", :dark_gray
+    if @is_encrypted > 1
+      # Per 14496-12, amendment 3.
+      print prefix
+      cputs "  Algorithm ID: #{@is_encrypted}", :dark_gray
+    end
+    print prefix
+    cputs "IV Size: #{@iv_size} bytes (#{@iv_size * 8} bits)", :dark_gray
+    print prefix
+    cputs "Key ID: #{@key_id.unpack('H*').first}", :dark_gray
+  end
+end
+
+class SencBox < Box
+  handles 'senc', 'Sample Encryption'
+
+  attr_accessor :version, :flags, :sample_count
+
+  def initialize(*args)
+    @version = nil
+    @flags = nil
+    @sample_count = nil
+    @samples = []
+    super
+  end
+
+  def read_data(stream)
+    @version, @flags = stream.ui8, stream.ui24
+    @sample_count = stream.ui32
+
+    if [8,16].include?(ENV['IV_SIZE'].to_i)
+      iv_size = ENV['IV_SIZE'].to_i
+    else
+      # TODO: Assuming 8-byte IV here, but it could be 16-byte too.  Have to get
+      # that data from 'tenc' box which could be in a separate init file.
+      iv_size = 16
+    end
+
+    @sample_count.times do |index|
+      sample_info = {}
+      sample_info[:iv] = stream.read(iv_size)
+      if (@flags & 2) == 2
+        sample_info[:subsamples] = []
+        sample_info[:subsample_count] = stream.ui16
+        sample_info[:subsample_count].times do
+          subsample_info = {}
+          subsample_info[:bytes_clear_data] = stream.ui16
+          subsample_info[:bytes_encrypted_data] = stream.ui32
+          sample_info[:subsamples] << subsample_info
+        end
+      end
+      @samples << sample_info
+    end
+  end
+
+  def print_extra_info(prefix = '')
+    if @sample_count != @samples.length
+      print prefix
+      cputs "Sample count (#{@sample_count}) doesn't match number of samples found (#{@samples.length})!", :red
+    end
+    print prefix
+    cputs "Sample Count: #{@sample_count}", :dark_gray
+    if $VERBOSE
+      trun = parent.first_child('trun')
+      @samples.each_with_index do |sample, index|
+        print prefix
+        cputs ("Sample %2d IV: #{sample[:iv].unpack('H*').first}" % (index + 1)), :dark_gray
+
+        subsamples_total_size = 0
+        (sample[:subsamples] || []).each_with_index do |subsample, subindex|
+          subsamples_total_size += subsample[:bytes_clear_data] + subsample[:bytes_encrypted_data]
+          print prefix
+          cputs ("  Subsample %2d: bytes_clear = #{subsample[:bytes_clear_data]}, bytes_encrypted = #{subsample[:bytes_encrypted_data]}" % (subindex + 1)), :dark_gray
+        end
+        if sample[:subsamples] && trun.entries[index] && trun.entries[index][:size].to_i > 0 && trun.entries[index][:size].to_i != subsamples_total_size
+          print prefix
+          cputs "  Subsamples size does not match trun entry size!", :red
+        end
+      end
+    end
+  end
+end
+
+class SaioBox < Box
+  handles 'saio', 'Sample Auxilliary Information Offsets'
+
+  attr_accessor :version, :flags, :aux_info_type, :aux_info_type_parameter, :entry_count, :entries
+
+  def initialize(*args)
+    @version = nil
+    @flags = nil
+    @aux_info_type = nil
+    @aux_info_type_parameter = nil
+    super
+  end
+
+  def read_data(stream)
+    @version,@flags = stream.ui8, stream.ui24
+
+    if (@flags & 1) == 1
+      @aux_info_type = stream.ui32
+      @aux_info_type_parameter = stream.ui32
+    end
+
+    @entries = []
+    @entry_count = stream.ui32
+    @entry_count.times do
+      if @version == 0
+        @entries << stream.ui32
+      else
+        @entries << stream.ui64
+      end
+    end
+  end
+
+  def print_extra_info(prefix = '')
+    if @aux_info_type
+      print prefix
+      cputs "Aux info type: #{@aux_info_type}", :dark_gray
+      print prefix
+      cputs "Aux info type parameter: #{@aux_info_type_parameter}", :dark_gray
+    end
+    print prefix
+    cputs "Entry Count: #{@entry_count}", :dark_gray
+    if $VERBOSE
+      @entries.each_with_index do |entry, index|
+        print prefix
+        cputs "Offset #{index + 1}: #{entry}", :dark_gray
+      end
+    end
+  end
+end
+
+class SaizBox < Box
+  handles 'saiz', 'Sample Auxilliary Information Sizes'
+
+  attr_accessor :version, :flags, :aux_info_type, :aux_info_type_parameter, :default_size, :entry_count, :entries
+
+  def initialize(*args)
+    @version = nil
+    @flags = nil
+    @aux_info_type = nil
+    @aux_info_type_parameter = nil
+    super
+  end
+
+  def read_data(stream)
+    @version,@flags = stream.ui8, stream.ui24
+
+    if (@flags & 1) == 1
+      @aux_info_type = stream.ui32
+      @aux_info_type_parameter = stream.ui32
+    end
+
+    @default_size = stream.ui8
+
+    @entries = []
+    @entry_count = stream.ui32
+
+    if @default_size == 0
+      @entry_count.times do
+        @entries << stream.ui8
+      end
+    end
+  end
+
+  def print_extra_info(prefix = '')
+    if @aux_info_type
+      print prefix
+      cputs "Aux info type: #{@aux_info_type}", :dark_gray
+      print prefix
+      cputs "Aux info type parameter: #{@aux_info_type_parameter}", :dark_gray
+    end
+    print prefix
+    cputs "Default Sample Size: #{@default_size}", :dark_gray
+    print prefix
+    cputs "Entry Count: #{@entry_count}", :dark_gray
+    if $VERBOSE
+      @entries.each_with_index do |entry, index|
+        print prefix
+        cputs "Size #{index + 1}: #{entry}", :dark_gray
+      end
+    end
+  end
+end
+
+class SchmBox < SubBox
+  handles 'schm', 'Scheme Type'
+
+  attr_accessor :version, :flags, :scheme, :scheme_version
+
+  def initialize(*args)
+    @version = nil
+    @flags = nil
+    @scheme = nil
+    @scheme_version = nil
+    # Might also be a UTF-8 Encoded URI here too.
+    super
+  end
+
+  def read_data(stream)
+    @version,@flags,@scheme,@scheme_version = stream.ui8, stream.ui24, stream.fourcc, stream.ui16
+  end
+
+  def print_extra_info(prefix = '')
+    print prefix
+    cputs "Scheme: #{@scheme}", :dark_gray
+    print prefix
+    cputs "Scheme Version: #{@scheme_version}", :dark_gray
+  end
+end
+
+class PsshBox < Box
+  handles 'pssh', 'Protection System Specific Header'
+
+  attr_accessor :version, :flags, :scheme, :scheme_version
+
+  def initialize(*args)
+    @version = nil
+    @flags = nil
+    @system_id = nil
+    @key_ids = []
+    @pssh_data_size = nil
+    @pssh_data = nil
+    super
+  end
+
+  def read_data(stream)
+    #cputs stream.read(8).unpack('a*').first, :dark_red
+    @version,@flags = stream.ui8, stream.ui24
+    @system_id = stream.uuid
+    if @version > 0
+      kid_count = stream.ui32
+      kid_count.times do
+        @key_ids << stream.uuid
+      end
+    end
+    @pssh_data_size = stream.ui32
+    @pssh_data = stream.read(@pssh_data_size).unpack('a*').first
+
+  end
+  
+  def print_extra_info(prefix = '')
+    print prefix
+    cputs "System ID: #{@system_id}", :red
+    print prefix
+    cputs "Version: #{@version}", :dark_gray
+    @key_ids.each_with_index do |key_id, index|
+      print prefix
+      cputs "Key #{index + 1}: #{key_id}", :dark_gray
+    end
+    print prefix
+    cputs "Data Size: #{@pssh_data_size}", :dark_gray
+    cputs "Data: #{@pssh_data}", :dark_red
+  end
+end
+
+class UuidBox < Box
+  handles 'uuid', 'Extended Information'
+
+  ALGORITHM_TYPES = ['Not Encrypted', 'AES-128-CTR', 'AES-128-CBC']
+  SAMPLE_ENCRYPTION_TYPE = 'A2394F52-5A9B-4F14-A244-6C427C648DF4'
+  PSSH_TYPE = 'D08A4F18-10F3-4A82-B6C8-32D8ABA183D3'
+
+  SYSTEM_IDS = {
+    '79F0049A-4098-8642-AB92-E65BE0885F95' => 'PlayReady Object v4.0.0.0',
+    '9A04F079-9840-4286-AB92-E65BE0885F95' => 'PlayReady Object v4.1.0.0'
+  }
+
+  attr_accessor :version, :flags, :scheme, :scheme_version
+
+  def initialize(*args)
+    @extended_type = nil
+    @version = nil
+    @flags = nil
+    @algorithm_id = nil
+    @iv_size = nil
+    @key_id = nil
+    @system_id = nil
+    @pssh_data_size = nil
+    @pro_records = []
+    @sample_count = nil
+    @samples = []
+    super
+  end
+
+  def read_data(stream)
+    @extended_type,@version,@flags = stream.uuid, stream.ui8, stream.ui24
+
+    if @extended_type == SAMPLE_ENCRYPTION_TYPE
+      if (@flags & 1) == 1
+        @algorithm_id,@iv_size,@key_id = stream.ui24, stream.ui8, stream.key128
+      end
+      @sample_count = stream.ui32
+
+      if [8,16].include?(ENV['IV_SIZE'].to_i)
+        default_iv_size = ENV['IV_SIZE'].to_i
+      else
+        # TODO: Assuming 8-byte IV here, but it could be 16-byte too.  Might have to get
+        # that data from 'tenc' box which could be in a separate init file.
+        default_iv_size = 16
+      end
+
+      @sample_count.times do |index|
+        sample_info = {}
+        sample_info[:iv] = stream.read(@iv_size || default_iv_size)
+        if (@flags & 2) == 2
+          sample_info[:subsamples] = []
+          sample_info[:subsample_count] = stream.ui16
+          sample_info[:subsample_count].times do
+            subsample_info = {}
+            subsample_info[:bytes_clear_data] = stream.ui16
+            subsample_info[:bytes_encrypted_data] = stream.ui32
+            sample_info[:subsamples] << subsample_info
+          end
+        end
+        @samples << sample_info
+      end
+
+    elsif @extended_type == PSSH_TYPE
+      @system_id, @pssh_data_size = stream.guid, stream.ui32
+
+      # Decode PlayReady PRO header.
+      if SYSTEM_IDS[@system_id].to_s =~ /^PlayReady/
+        pro_length = stream.dword
+        pro_record_count = stream.word
+        pro_record_count.times do
+          record_type = stream.word
+          record_length = stream.word
+          record_value = stream.read(record_length)
+          decoded = {}
+
+          if record_type == 1 # Rights Management Headers
+            ascii = record_value.utf16_to_ascii
+            decoded[:header_version] = $1 if ascii =~ /version="([^"]+)"/
+            decoded[:keylen] = $1.to_i if ascii =~ /<KEYLEN>(\d+)<\/KEYLEN>/
+            decoded[:algid] = $1 if ascii =~ /<ALGID>([^<]+)<\/ALGID>/
+            decoded[:la_url] = $1 if ascii =~ /<LA_URL>([^<]+)<\/LA_URL>/
+            decoded[:kid_base64] = $1 if ascii =~ /<KID>([^<]+)<\/KID>/
+            decoded[:kid] = Base64.decode64(decoded[:kid_base64]).unpack('H*').first if decoded[:kid_base64]
+          end
+
+          @pro_records << {
+            :type => ['Unknown','Rights Management Header','Reserved','Embedded License Store'][record_type] || 'Unknown',
+            :size => record_length,
+            :value => record_value,
+            :empty => record_value.to_s.gsub(/\x00/n,'').length == 0,
+            :decoded => decoded
+          }
+        end
+      end
+    end
+  end
+
+  def print_extra_info(prefix = '')
+    if @extended_type == SAMPLE_ENCRYPTION_TYPE
+      print prefix
+      cputs "Extended Type: Sample Encryption Box", :dark_gray
+      print prefix
+      cputs "Overrides TrackEncryptionBox parameters: #{((@flags & 1) == 1) ? 'Yes' : 'No'}", :dark_gray
+      print prefix
+      cputs "Uses Subsample Encryption: #{((@flags & 2) == 2) ? 'Yes' : 'No'}", :dark_gray
+      if (@flags & 1) == 1
+        print prefix
+        cputs "Algorithm ID: #{@algorithm_id} (#{ALGORITHM_TYPES[@algorithm_id] || 'Unknown'})", :dark_gray
+        print prefix
+        cputs "IV Size: #{@iv_size}", :dark_gray
+        print prefix
+        cputs "Key ID: #{@key_id}", :dark_gray
+      end
+      if @sample_count != @samples.length
+        print prefix
+        cputs "Sample count (#{@sample_count}) doesn't match number of samples found (#{@samples.length})!", :red
+      end
+      print prefix
+      cputs "Sample Count: #{@sample_count}", :dark_gray
+      if $VERBOSE
+        trun = parent.first_child('trun')
+
+        @samples.each_with_index do |sample, index|
+          print prefix
+          cputs ("Sample %2d IV: #{sample[:iv].unpack('H*').first}" % (index + 1)), :dark_gray
+
+          subsamples_total_size = 0
+          (sample[:subsamples] || []).each_with_index do |subsample, subindex|
+            subsamples_total_size += subsample[:bytes_clear_data] + subsample[:bytes_encrypted_data]
+            print prefix
+            cputs ("  Subsample %2d: bytes_clear = #{subsample[:bytes_clear_data]}, bytes_encrypted = #{subsample[:bytes_encrypted_data]}" % (subindex + 1)), :dark_gray
+          end
+          if sample[:subsamples] && trun && trun.entries[index] && trun.entries[index][:size].to_i > 0 && trun.entries[index][:size].to_i != subsamples_total_size
+            print prefix
+            cputs "  Subsamples size does not match trun entry size!", :red
+          end
+        end
+      end
+
+    elsif @extended_type == PSSH_TYPE
+      print prefix
+      cputs "Extended Type: PSSH (Protection System Specific Header) Box", :dark_gray
+      print prefix
+      cputs "System ID: #{@system_id} (#{SYSTEM_IDS[@system_id] || 'Unknown'})", :dark_gray
+
+      if SYSTEM_IDS[@system_id].to_s =~ /^PlayReady/
+        @pro_records.each do |pro|
+          print prefix
+          cputs "PlayReady Header Object: #{pro[:type]}#{' (Empty)' if pro[:empty]}", :dark_gray
+
+          pro[:decoded].keys.sort.each do |key|
+            print prefix
+            cputs "  #{key}: #{pro[:decoded][key]}", :dark_gray
+          end
+
+          if $VERBOSE && pro[:type] == 'Rights Management Header'
+            print prefix
+            cputs "Header Object Value: #{pro[:value]}", :dark_gray
+          end
+        end
+      end
+
+    else
+      print prefix
+      cputs "Extended Type: #{@extended_type} (Unknown)", :dark_gray
+    end
+  end
+end
+
+class UuidSubBox < SubBox
+  handles 'uuid', 'Extended Information'
+
+  ALGORITHM_TYPES = ['Not Encrypted', 'AES-128-CTR', 'AES-128-CBC']
+  TRACK_ENCRYPTION_TYPE = '8974DBCE-7BE7-4C51-84F9-7148F9882554'
+
+  attr_accessor :version, :flags, :scheme, :scheme_version
+
+  def initialize(*args)
+    @extended_type = nil
+    @version = nil
+    @flags = nil
+    @algorithm_id = nil
+    @iv_size = nil
+    @key_id = nil
+    super
+  end
+
+  def read_data(stream)
+    @extended_type,@version,@flags = stream.uuid, stream.ui8, stream.ui24
+
+    if @extended_type == TRACK_ENCRYPTION_TYPE
+      @algorithm_id,@iv_size,@key_id = stream.ui24, stream.ui8, stream.key128
+    end
+  end
+
+  def print_extra_info(prefix = '')
+    if @extended_type == TRACK_ENCRYPTION_TYPE
+      print prefix
+      cputs "Extended Type: Track Encryption Box", :dark_gray
+      print prefix
+      cputs "Algorithm ID: #{@algorithm_id} (#{ALGORITHM_TYPES[@algorithm_id] || 'Unknown'})", :dark_gray
+      print prefix
+      cputs "IV Size: #{@iv_size}", :dark_gray
+      print prefix
+      cputs "Key ID: #{@key_id}", :dark_gray
+    else
+      print prefix
+      cputs "Extended Type: #{@extended_type} (Unknown)", :dark_gray
+    end
+  end
+end
+
+class StsdBox < BoxWithSubBoxes
+  handles 'stsd', 'Sample Descriptions'
+
+  attr_accessor :version, :entry_count
+
+  def initialize(*args)
+    @version = nil
+    super
+  end
+
+  def read_header_data(stream)
+    @version,@entry_count = stream.ui32, stream.ui32
+  end
+
+  def print_extra_info(prefix = '')
+    print prefix
+    cputs "Version: #{@version}", :dark_gray
+    print prefix
+    cputs "Entry Count: #{@entry_count}", :dark_gray
+  end
+end
+
+
+
+class SidxBox < Box
+  handles "sidx", "Segment Index"
+
+  attr_accessor :version, :flags, :reference_count, :references
+
+  def initialize(*args)
+    @version = nil
+    @flags = nil
+    @references = []
+    super
+  end
+
+  def read_data(stream)
+    @version,@flags = stream.ui8, stream.ui24
+    @reference_id = stream.ui32
+    @timescale = stream.ui32
+    if @version == 0
+      @earliest_presentation_time = stream.ui32
+      @first_offset = stream.ui32
+    else
+      @earliest_presentation_time = stream.ui64
+      @first_offset = stream.ui64
+    end
+    reserved = stream.ui16
+    @reference_count = stream.ui16
+    @reference_count.times do
+      reference = {}
+      fields = stream.ui32
+      reference[:type] = fields >> 31
+      reference[:size] = fields & ((2**31)-1)
+      reference[:duration] = stream.ui32
+      fields = stream.ui32
+      reference[:starts_with_sap] = fields >> 31         # "sap" = Stream Access Point
+      reference[:sap_type] = (fields >> 28) & 7
+      reference[:sap_delta_time] = fields & ((2**28)-1)  # time of first sap, as offset from earliest presentation time
+      @references << reference
+    end
+  end
+
+  def print_extra_info(prefix = '')
+    print prefix
+    cputs "Reference (Track/Stream) ID: #{@reference_id}", :dark_gray
+    print prefix
+    cputs "Timescale: #{@timescale}", :dark_gray
+    print prefix
+    cputs "Earliest Presentation Time: #{@earliest_presentation_time}", :dark_gray
+    print prefix
+    cputs "First Offset: #{@first_offset}", :dark_gray
+    print prefix
+    cputs "Reference Count: #{@reference_count}", :dark_gray
+    if $VERBOSE
+      @references.each_with_index do |reference, index|
+        print prefix
+        cputs "Reference #{index+1}: #{reference.to_s}", :dark_gray
+      end
+    end
+  end
+end
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+#################################################################################
+
+rainbow
+
+$VERBOSE = false
+$VERBOSE2 = false
+$DEBUG = false
+
+while ['-v','-vv','-nc'].include?(ARGV.first)
+  arg = ARGV.shift
+  case arg
+  when '-v'
+    $VERBOSE = true
+  when '-vv'
+    $VERBOSE = true
+    $VERBOSE2 = true
+  end
+end
+
+error "Please specify a file to inspect." unless ARGV.length > 0
+
+input_filename = ARGV.first
+error "Input file not found." unless File.exist?(input_filename)
+
+file_size = File.size(input_filename)
+input_file = File.open(input_filename)
+
+begin
+  file = BoxFile.new(input_file)
+  file.parse
+ensure
+  file.print_tree
+end

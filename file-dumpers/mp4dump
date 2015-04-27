@@ -929,7 +929,7 @@ class SencBox < Box
     else
       # TODO: Assuming 8-byte IV here, but it could be 16-byte too.  Have to get
       # that data from 'tenc' box which could be in a separate init file.
-      iv_size = 8
+      iv_size = 16
     end
 
     @sample_count.times do |index|
@@ -1130,11 +1130,12 @@ class PsshBox < Box
       end
     end
     @pssh_data_size = stream.ui32
+    @pssh_data = stream.read(@pssh_data_size).unpack('a*').first
   end
   
   def print_extra_info(prefix = '')
     print prefix
-    cputs "System ID: #{@system_id}", :dark_gray
+    cputs "System ID: #{@system_id}", :red
     print prefix
     cputs "Version: #{@version}", :dark_gray
     @key_ids.each_with_index do |key_id, index|
@@ -1143,6 +1144,8 @@ class PsshBox < Box
     end
     print prefix
     cputs "Data Size: #{@pssh_data_size}", :dark_gray
+    print prefix
+    cputs "Header: #{@pssh_data}", :dark_gray
   end
 end
 
