@@ -1938,6 +1938,8 @@ class Mp4aSubBox < SubBoxWithSubBoxes
   handles 'twos', 'TWOS Audio Description'
   handles 'aace', 'AACE Audio Description'
   handles 'lpcm', 'Linear PCM Audio Description'
+  handles 'ac-3', 'Dolby AC3 Audio Description'
+  handles 'ec-3', 'Dolby EAC3 Audio Description'
 
   handles 'enca', 'Encrypted Audio Description'
 
@@ -2805,6 +2807,111 @@ class EsdsSubBox < SubBox
   end
 
 end
+
+class Dac3SubBox < SubBox
+  handles 'dac3', 'Dolby AC3 Configuration'
+
+  SAMPLE_RATES = [48000, 44100, 32000, 'Unknown']
+
+  BIT_RATES = [
+    32,
+    40,
+    48,
+    56,
+    64,
+    80,
+    96,
+    112,
+    128,
+    160,
+    192,
+    224,
+    256,
+    320,
+    384,
+    448,
+    512,
+    576,
+    640
+  ]
+
+  CHANNEL_CONFIGS = [
+    '1+1 Mono/Mono',
+    'C',
+    'L,R',
+    'L,C,R',
+    'L,R,S',
+    'L,C,R,S',
+    'L,R,SL,SR',
+    'L,C,R,SL,SR'
+  ]
+  CHANNEL_COUNTS = [2, 1, 2, 3, 3, 4, 4, 5]
+
+  def read_header_data(stream)
+    return if @data_size < 3
+    dac3_data = Bitstream.new(stream.read(3))
+    @fscod = dac3_data.getbits(2)
+    bsid  = dac3_data.getbits(5)
+    bsmod = dac3_data.getbits(3)
+    @acmod = dac3_data.getbits(3)
+    @lfeon = dac3_data.getbits(1)
+    @bit_rate_code = dac3_data.getbits(5)
+  end
+
+  def print_extra_info(prefix = '')
+    print prefix
+    cputs "Sample Rate: #{SAMPLE_RATES[@fscod]}", :dark_gray
+    print prefix
+    cputs "Channel Count: #{CHANNEL_COUNTS[@acmod] + @lfeon}", :dark_gray
+    print prefix
+    cputs "Channel Config: #{CHANNEL_CONFIGS[@acmod]}#{',LFE' if @lfeon == 1}", :dark_gray
+    print prefix
+    cputs "Bit Rate: #{BIT_RATES[@bit_rate_code]}", :dark_gray
+  end
+end
+
+class Dec3SubBox < SubBox
+  handles 'dec3', 'Dolby EAC3 Configuration'
+
+  def read_header_data(stream)
+    independent_streams = []
+
+    dec3_data = Bitstream.new(stream.read(@data_size))
+    data_rate = dec3_data.getbits(13)
+    num_independent_streams = dec3_data.getbits(3)
+    num_independent_streams.each do
+      fscod = dec3_data.getbits(2)
+      bsid  = dec3_data.getbits(5)
+      bsmod = dec3_data.getbits(5) # F.6 chart says 5 bits, F.6.1.5 says 3 bits.
+      acmod = dec3_data.getbits(3)
+      lfeon = dec3_data.getbits(1)
+      reserved = dec3_data.getbits(3)
+      num_dependent_streams = dec3_data.getbits(4)
+      if num_dependent_streams > 0
+        chan_loc = dec3_data.getbits(9)
+      else
+        chan_loc = nil
+        reserved = dec3_data.getbits(1)
+      end
+
+      independent_streams << {
+        :fscod => fscod,
+        :bsid => bsid,
+        :bsmod => bsmod,
+        :acmod => acmod,
+        :lfeon => lfeon,
+        :num_dependent_streams => num_dependent_streams,
+        :chan_loc => chan_loc
+      }
+    end
+  end
+
+  def print_extra_info(prefix = '')
+    print prefix
+    cputs "Version: #{@version}", :dark_gray
+  end
+end
+
 
 class MetaBox < BoxWithChildren
   handles 'meta', 'Meta Data'
