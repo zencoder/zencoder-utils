@@ -2808,10 +2808,25 @@ class EsdsSubBox < SubBox
 
 end
 
-class Dac3SubBox < SubBox
-  handles 'dac3', 'Dolby AC3 Configuration'
-
+class DolbyConfigBox < SubBox
   SAMPLE_RATES = [48000, 44100, 32000, 'Unknown']
+
+  CHANNEL_CONFIGS = [
+    '1+1 Mono/Mono',
+    'C',
+    'L,R',
+    'L,C,R',
+    'L,R,S',
+    'L,C,R,S',
+    'L,R,SL,SR',
+    'L,C,R,SL,SR'
+  ]
+
+  CHANNEL_COUNTS = [2, 1, 2, 3, 3, 4, 4, 5]
+end
+
+class Dac3SubBox < DolbyConfigBox
+  handles 'dac3', 'Dolby AC3 Configuration'
 
   BIT_RATES = [
     32,
@@ -2835,17 +2850,6 @@ class Dac3SubBox < SubBox
     640
   ]
 
-  CHANNEL_CONFIGS = [
-    '1+1 Mono/Mono',
-    'C',
-    'L,R',
-    'L,C,R',
-    'L,R,S',
-    'L,C,R,S',
-    'L,R,SL,SR',
-    'L,C,R,SL,SR'
-  ]
-  CHANNEL_COUNTS = [2, 1, 2, 3, 3, 4, 4, 5]
 
   def read_header_data(stream)
     return if @data_size < 3
@@ -2870,16 +2874,28 @@ class Dac3SubBox < SubBox
   end
 end
 
-class Dec3SubBox < SubBox
+class Dec3SubBox < DolbyConfigBox
   handles 'dec3', 'Dolby EAC3 Configuration'
 
+  DEPENDENT_CHANNEL_LOCATION_NAMES = [
+    'Lc/Rc pair',
+    'Lrs/Rrs pair',
+    'Cs',
+    'Ts',
+    'Lsd/Rsd pair',
+    'Lw/Rw pair',
+    'Lvh/Rvh pair',
+    'Cvh',
+    'LFE2'
+  ]
+
   def read_header_data(stream)
-    independent_streams = []
+    @independent_streams = []
 
     dec3_data = Bitstream.new(stream.read(@data_size))
-    data_rate = dec3_data.getbits(13)
-    num_independent_streams = dec3_data.getbits(3)
-    num_independent_streams.each do
+    @data_rate = dec3_data.getbits(13)
+    @num_independent_streams = dec3_data.getbits(3) + 1
+    @num_independent_streams.times do
       fscod = dec3_data.getbits(2)
       bsid  = dec3_data.getbits(5)
       bsmod = dec3_data.getbits(5) # F.6 chart says 5 bits, F.6.1.5 says 3 bits.
@@ -2890,11 +2906,11 @@ class Dec3SubBox < SubBox
       if num_dependent_streams > 0
         chan_loc = dec3_data.getbits(9)
       else
-        chan_loc = nil
+        chan_loc = 0
         reserved = dec3_data.getbits(1)
       end
 
-      independent_streams << {
+      @independent_streams << {
         :fscod => fscod,
         :bsid => bsid,
         :bsmod => bsmod,
@@ -2906,9 +2922,42 @@ class Dec3SubBox < SubBox
     end
   end
 
+  def dependent_channel_locations(chan_loc)
+    locations = []
+    DEPENDENT_CHANNEL_LOCATION_NAMES.each_with_index do |name,index|
+      locations << name if (chan_loc & (2**index)) > 0
+    end
+    locations.join(', ')
+  end
+
   def print_extra_info(prefix = '')
     print prefix
-    cputs "Version: #{@version}", :dark_gray
+    cputs "Data Rate: #{@data_rate} kbit/s (max)"
+
+    if @num_independent_streams > 1
+      print prefix
+      cputs "Independent Stream Count: #{@num_independent_streams}"
+      indent_prefix = prefix + '  '
+    else
+      indent_prefix = prefix
+    end
+
+    @independent_streams.each_with_index do |stream,index|
+      if @num_independent_streams > 1
+        print prefix
+        cputs "Stream #{index+1}:"
+      end
+      print indent_prefix
+      cputs "Sample Rate: #{SAMPLE_RATES[stream[:fscod]]}", :dark_gray
+      print indent_prefix
+      cputs "Channel Count: #{CHANNEL_COUNTS[stream[:acmod]] + stream[:lfeon]}", :dark_gray
+      print indent_prefix
+      cputs "Channel Config: #{CHANNEL_CONFIGS[stream[:acmod]]}#{',LFE' if stream[:lfeon] == 1}", :dark_gray
+      if stream[:num_dependent_streams] > 0
+        print indent_prefix
+        cputs "Dependent Channel Locations: #{dependent_channel_locations(stream[:chan_loc])}", :dark_gray
+      end
+    end
   end
 end
 
