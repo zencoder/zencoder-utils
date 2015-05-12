@@ -910,13 +910,14 @@ end
 class SencBox < Box
   handles 'senc', 'Sample Encryption'
 
-  attr_accessor :version, :flags, :sample_count
+  attr_accessor :version, :flags, :sample_count, :iv_size
 
   def initialize(*args)
     @version = nil
     @flags = nil
     @sample_count = nil
     @samples = []
+    @iv_size = nil
     super
   end
 
@@ -925,27 +926,43 @@ class SencBox < Box
     @sample_count = stream.ui32
 
     if [8,16].include?(ENV['IV_SIZE'].to_i)
-      iv_size = ENV['IV_SIZE'].to_i
+      @iv_size = ENV['IV_SIZE'].to_i
     else
       # TODO: Assuming 8-byte IV here, but it could be 16-byte too.  Have to get
       # that data from 'tenc' box which could be in a separate init file.
-      iv_size = 8
+      @iv_size = 8
     end
 
-    @sample_count.times do |index|
-      sample_info = {}
-      sample_info[:iv] = stream.read(iv_size)
-      if (@flags & 2) == 2
-        sample_info[:subsamples] = []
-        sample_info[:subsample_count] = stream.ui16
-        sample_info[:subsample_count].times do
-          subsample_info = {}
-          subsample_info[:bytes_clear_data] = stream.ui16
-          subsample_info[:bytes_encrypted_data] = stream.ui32
-          sample_info[:subsamples] << subsample_info
+    # Pre-read the sample data, so we can go back and re-try if we have the IV size wrong.
+    sample_data = stream.read(@data_size - 8)
+
+    retried_with_alternate_iv_size = false
+    begin
+      @samples = []
+      sample_stream = StringIO.new(sample_data)
+      @sample_count.times do |index|
+        sample_info = {}
+        sample_info[:iv] = sample_stream.read(@iv_size)
+        if (@flags & 2) == 2
+          sample_info[:subsamples] = []
+          sample_info[:subsample_count] = sample_stream.ui16
+          sample_info[:subsample_count].times do
+            subsample_info = {}
+            subsample_info[:bytes_clear_data] = sample_stream.ui16
+            subsample_info[:bytes_encrypted_data] = sample_stream.ui32
+            sample_info[:subsamples] << subsample_info
+          end
         end
+        @samples << sample_info
       end
-      @samples << sample_info
+    rescue
+      if retried_with_alternate_iv_size
+        raise
+      else
+        retried_with_alternate_iv_size = true
+        @iv_size = (24 - @iv_size) # Swap between 8 and 16.
+        retry
+      end
     end
   end
 
@@ -956,6 +973,8 @@ class SencBox < Box
     end
     print prefix
     cputs "Sample Count: #{@sample_count}", :dark_gray
+    print prefix
+    cputs "IV Size: #{@iv_size}", :dark_gray
     if $VERBOSE
       trun = parent.first_child('trun')
       @samples.each_with_index do |sample, index|
