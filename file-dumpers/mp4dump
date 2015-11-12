@@ -576,6 +576,7 @@ class TrunBox < Box
     @data_offset = stream.si32 if @data_offset_present > 0
     @first_sample_flags = stream.ui32 if @first_sample_flags_present > 0
 
+    dts = 0
     @entries = []
     @entry_count.times do
       entry = {}
@@ -583,6 +584,13 @@ class TrunBox < Box
       entry[:size] = stream.ui32 if @sample_size_present > 0
       entry[:flags] = stream.ui32 if @sample_flags_present > 0
       entry[:composition_time_offset] = stream.si32 if @sample_composition_time_offsets_present > 0
+
+      if @sample_composition_time_offsets_present > 0
+        entry[:calculated_dts] = dts
+        entry[:calculated_pts] = dts + entry[:composition_time_offset]
+      end
+
+      dts += entry[:duration]
       @entries << entry
     end
   end
@@ -1314,6 +1322,8 @@ class UuidBox < Box
         @pro_records.each do |pro|
           print prefix
           cputs "PlayReady Header Object: #{pro[:type]}#{' (Empty)' if pro[:empty]}", :dark_gray
+          print prefix
+          cputs "  Size: #{pro[:size]}", :dark_gray
 
           pro[:decoded].keys.sort.each do |key|
             print prefix
