@@ -2819,7 +2819,7 @@ class EsdsSubBox < SubBox
             if extension_sampling_frequency_index == 0xf
               @extension_sampling_frequency = asc.getbits(24)
             else
-              @extension_sampling_frequency = mpeg4_audio_frequencies[extension_sampling_frequency_index]
+              @extension_sampling_frequency = MPEG4_AUDIO_FREQUENCIES[extension_sampling_frequency_index]
             end
             if asc.remaining_bits >= 12
               sync_extension_type = asc.getbits(11)
