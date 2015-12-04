@@ -19,7 +19,7 @@ class BoxFile
   end
 
   def parse
-    while (box = Box.read(@data))
+    while (box = Box.read(@data, :box_file => self))
       boxes << box
       break if box.size == 0 # Zero size means it extends to the end of the file.
       break if !box.valid
@@ -80,6 +80,7 @@ class Box
     @data = nil
     @children = []
     @parent = options[:parent]
+    @box_file = options[:box_file]
     read_data(stream)
 
     # Make sure to read in any trailing junk data.
@@ -117,6 +118,11 @@ class Box
   end
 
   def print_extra_info(prefix = '')
+  end
+
+  def find_root_box(box_kind)
+    return nil unless @box_file
+    @box_file.boxes.detect { |c| c.kind == box_kind }
   end
 
   def find_parent(parent_kind)
@@ -173,7 +179,7 @@ class BoxWithChildren < Box
   handles 'encv', 'Encrypted Video'
 
   def read_data(stream)
-    while stream.pos < (@base_offset + @size - 7) && (box = Box.read(stream, :parent => self))
+    while stream.pos < (@base_offset + @size - 7) && (box = Box.read(stream, :parent => self, :box_file => @box_file))
       @children << box
     end
 
@@ -575,6 +581,15 @@ class TrunBox < Box
     @entry_count = stream.ui32
     @data_offset = stream.si32 if @data_offset_present > 0
     @first_sample_flags = stream.ui32 if @first_sample_flags_present > 0
+    # See `print_sample_flags` for info on the flags.
+
+    # Get the default duration for this track, if it exists...  First figure out the track ID if we can,
+    # then go see if we're in the same file as the moov/mvex, to get the defaults.
+    track_id = find_parent('traf').first_child('tfhd').track_id rescue nil
+    mvex = find_root_box('moov').first_child('mvex') rescue nil
+    trex = mvex.children.detect { |c| c.kind == 'trex' && c.track_id == track_id } rescue nil
+
+    default_duration_from_trex = trex.default_sample_duration rescue nil
 
     dts = 0
     @entries = []
@@ -590,7 +605,7 @@ class TrunBox < Box
         entry[:calculated_pts] = dts + entry[:composition_time_offset]
       end
 
-      dts += entry[:duration]
+      dts += (entry[:duration] || default_duration_from_trex).to_i
       @entries << entry
     end
   end
