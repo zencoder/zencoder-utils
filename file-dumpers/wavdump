@@ -78,5 +78,6 @@ puts "File info:"
 puts "  Channels:    #{inwav.headers[:channels]}"
 puts "  Sample Rate: #{inwav.headers[:sample_rate]}"
 puts "  Bits/Sample: #{inwav.headers[:bits_per_sample]}"
+puts "  Samples:     #{inwav.headers[:sample_count]}"
 puts "  Duration:    #{inwav.duration}"
 
