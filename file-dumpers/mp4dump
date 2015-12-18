@@ -1151,6 +1151,10 @@ end
 class PsshBox < Box
   handles 'pssh', 'Protection System Specific Header'
 
+  SYSTEM_IDS = {
+    'EDEF8BA9-79D6-4ACE-A3C8-27DCD51D21ED' => 'Widevine'
+  }
+
   attr_accessor :version, :flags, :scheme, :scheme_version
 
   def initialize(*args)
@@ -1165,6 +1169,7 @@ class PsshBox < Box
   def read_data(stream)
     @version,@flags = stream.ui8, stream.ui24
     @system_id = stream.uuid
+    @system_id_name = SYSTEM_IDS[@system_id] || 'Unknown'
     if @version > 0
       kid_count = stream.ui32
       kid_count.times do
@@ -1172,11 +1177,17 @@ class PsshBox < Box
       end
     end
     @pssh_data_size = stream.ui32
+    @pssh_data = stream.read(@pssh_data_size)
+
+    @widevine_fields = {}
+    if @system_id_name == 'Widevine'
+      decode_widevine_pssh(@pssh_data)
+    end
   end
   
   def print_extra_info(prefix = '')
     print prefix
-    cputs "System ID: #{@system_id}", :dark_gray
+    cputs "System ID: #{@system_id} (#{@system_id_name})", :dark_gray
     print prefix
     cputs "Version: #{@version}", :dark_gray
     @key_ids.each_with_index do |key_id, index|
@@ -1185,6 +1196,77 @@ class PsshBox < Box
     end
     print prefix
     cputs "Data Size: #{@pssh_data_size}", :dark_gray
+    if @system_id_name == 'Widevine'
+      print prefix
+      cputs "Widevine Data:", :dark_gray
+      @widevine_fields.each_pair do |name,value|
+        print prefix
+        cputs "  #{name}: #{value}", :dark_gray
+      end
+    end
+  end
+
+  def protobuf_varint(bitstream)
+    value = 0
+    loop do
+      more_bits = bitstream.getbits(1)
+      value = (value << 7) + bitstream.getbits(7)
+      break if more_bits == 0
+    end
+    value
+  end
+
+  def decode_widevine_pssh(data)
+    # Basically decoding protobuf here...  But whatever.
+
+    field_numbers = {
+      1 => 'Algorithm',
+      2 => 'Key ID',
+      3 => 'Provider',
+      4 => 'Content ID',
+      5 => 'Track Type',
+      6 => 'Policy',
+      7 => 'Crypto Period Index'
+    }
+
+    algorithms = {
+      0 => 'Unencrypted',
+      1 => 'AES-CTR'
+    }
+
+    buf = Bitstream.new(data)
+    while buf.remaining_bits > 8
+      field_num = buf.getbits(5)
+      wire_type = buf.getbits(3)
+
+      field_name = field_numbers[field_num]
+
+      case wire_type
+      when 0 # Variable Length Integer
+        value = protobuf_varint(buf)
+      when 2 # String
+        len = protobuf_varint(buf)
+        value = buf.read(len)
+      else
+        # Unsupported... Skip the rest.
+        @widevine_fields[field_name] = "Unsupported datatype (#{wire_type} -- skipping subsequent fields!"
+        return
+      end
+
+      if field_name == 'Algorithm'
+        @widevine_fields[field_name] = algorithms[value] || 'Unknown'
+      elsif value.kind_of?(String)
+        bytes = value.bytes
+        is_binary = bytes.any? { |b| b < 32 || b > 127 }
+        if is_binary
+          @widevine_fields[field_name] = value.unpack('H*').first
+        else
+          @widevine_fields[field_name] = value
+        end
+      else
+        @widevine_fields[field_name] = value
+      end
+    end
   end
 end
 
