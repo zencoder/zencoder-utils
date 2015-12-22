@@ -100,7 +100,7 @@ def decode_script_data(data, prefix = '', cur_pos = 0)
     puts "#{prefix}ECMA array (length = #{array_len})"
 
     while true
-      if cur_pos >= data.length
+      if cur_pos >= array_len
         puts "#{prefix}  RAN OUT OF ECMA ARRAY DATA!"
         break
       end
