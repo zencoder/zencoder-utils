@@ -95,22 +95,18 @@ def decode_script_data(data, prefix = '', cur_pos = 0)
     end
 
   when 8
-    array_len = data[cur_pos,4].unpack('N').first
+    array_elements_approx = data[cur_pos,4].unpack('N').first
     cur_pos += 4
-    puts "#{prefix}ECMA array (length = #{array_len})"
+    puts "#{prefix}ECMA array (number of elements approx. = #{array_elements_approx})"
 
     while true
-      if cur_pos >= array_len
-        puts "#{prefix}  RAN OUT OF ECMA ARRAY DATA!"
-        break
-      end
-
       name_len = data[cur_pos,2].unpack('n').first
       cur_pos += 2
       if name_len == 0
         name = ''
         if data[cur_pos,1].unpack('C').first == 9
           # End of array.
+          cur_pos += 1
           break
         end
       else
