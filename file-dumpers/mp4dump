@@ -9,7 +9,6 @@ require 'dump_helpers'
 require 'zlib'
 require 'base64'
 
-
 class BoxFile
   attr_accessor :boxes
 
@@ -1152,7 +1151,9 @@ class PsshBox < Box
   handles 'pssh', 'Protection System Specific Header'
 
   SYSTEM_IDS = {
-    'EDEF8BA9-79D6-4ACE-A3C8-27DCD51D21ED' => 'Widevine'
+    'EDEF8BA9-79D6-4ACE-A3C8-27DCD51D21ED' => 'Widevine',
+    '79F0049A-4098-8642-AB92-E65BE0885F95' => 'PlayReady v4.0.0.0',
+    '9A04F079-9840-4286-AB92-E65BE0885F95' => 'Playready v4.1.0.0'
   }
 
   attr_accessor :version, :flags, :scheme, :scheme_version
@@ -1179,9 +1180,14 @@ class PsshBox < Box
     @pssh_data_size = stream.ui32
     @pssh_data = stream.read(@pssh_data_size)
 
+    @pro_records = []
     @widevine_fields = {}
-    if @system_id_name == 'Widevine'
+
+    case @system_id_name
+    when 'Widevine'
       decode_widevine_pssh(@pssh_data)
+    when /^Playready/
+      @pro_records = self.class.decode_playready_pssh(@pssh_data)
     end
   end
   
@@ -1196,12 +1202,30 @@ class PsshBox < Box
     end
     print prefix
     cputs "Data Size: #{@pssh_data_size}", :dark_gray
+
     if @system_id_name == 'Widevine'
       print prefix
       cputs "Widevine Data:", :dark_gray
       @widevine_fields.each_pair do |name,value|
         print prefix
         cputs "  #{name}: #{value}", :dark_gray
+      end
+    elsif @system_id_name =~ /^Playready/
+      @pro_records.each do |pro|
+        print prefix
+        cputs "PlayReady Header Object: #{pro[:type]}#{' (Empty)' if pro[:empty]}", :dark_gray
+        print prefix
+        cputs "  Size: #{pro[:size]}", :dark_gray
+
+        pro[:decoded].keys.sort.each do |key|
+          print prefix
+          cputs "  #{key}: #{pro[:decoded][key]}", :dark_gray
+        end
+
+        if $VERBOSE && pro[:type] == 'Rights Management Header'
+          print prefix
+          cputs "Header Object Value: #{pro[:value]}", :dark_gray
+        end
       end
     end
   end
@@ -1214,6 +1238,46 @@ class PsshBox < Box
       break if more_bits == 0
     end
     value
+  end
+
+  def self.utf16_to_ascii(s)
+    r = []
+    s.bytes.to_a.each_with_index { |v,i| r << v if i % 2 == 0 }
+    r.pack('c*')
+  end
+
+  def self.decode_playready_pssh(data)
+    pro_records = []
+
+    stream = StringIO.new(data)
+    pro_length = stream.dword
+    pro_record_count = stream.word
+    pro_record_count.times do
+      record_type = stream.word
+      record_length = stream.word
+      record_value = stream.read(record_length)
+      decoded = {}
+
+      if record_type == 1 # Rights Management Headers
+        ascii = utf16_to_ascii(record_value)
+        decoded[:header_version] = $1 if ascii =~ /version="([^"]+)"/
+        decoded[:keylen] = $1.to_i if ascii =~ /<KEYLEN>(\d+)<\/KEYLEN>/
+        decoded[:algid] = $1 if ascii =~ /<ALGID>([^<]+)<\/ALGID>/
+        decoded[:la_url] = $1 if ascii =~ /<LA_URL>([^<]+)<\/LA_URL>/
+        decoded[:kid_base64] = $1 if ascii =~ /<KID>([^<]+)<\/KID>/
+        decoded[:kid] = Base64.decode64(decoded[:kid_base64]).unpack('H*').first if decoded[:kid_base64]
+      end
+
+      pro_records << {
+        :type => ['Unknown','Rights Management Header','Reserved','Embedded License Store'][record_type] || 'Unknown',
+        :size => record_length,
+        :value => record_value,
+        :empty => record_value.to_s.gsub(/\x00/n,'').length == 0,
+        :decoded => decoded
+      }
+    end
+
+    pro_records
   end
 
   def decode_widevine_pssh(data)
@@ -1337,32 +1401,8 @@ class UuidBox < Box
 
       # Decode PlayReady PRO header.
       if SYSTEM_IDS[@system_id].to_s =~ /^PlayReady/
-        pro_length = stream.dword
-        pro_record_count = stream.word
-        pro_record_count.times do
-          record_type = stream.word
-          record_length = stream.word
-          record_value = stream.read(record_length)
-          decoded = {}
-
-          if record_type == 1 # Rights Management Headers
-            ascii = record_value.utf16_to_ascii
-            decoded[:header_version] = $1 if ascii =~ /version="([^"]+)"/
-            decoded[:keylen] = $1.to_i if ascii =~ /<KEYLEN>(\d+)<\/KEYLEN>/
-            decoded[:algid] = $1 if ascii =~ /<ALGID>([^<]+)<\/ALGID>/
-            decoded[:la_url] = $1 if ascii =~ /<LA_URL>([^<]+)<\/LA_URL>/
-            decoded[:kid_base64] = $1 if ascii =~ /<KID>([^<]+)<\/KID>/
-            decoded[:kid] = Base64.decode64(decoded[:kid_base64]).unpack('H*').first if decoded[:kid_base64]
-          end
-
-          @pro_records << {
-            :type => ['Unknown','Rights Management Header','Reserved','Embedded License Store'][record_type] || 'Unknown',
-            :size => record_length,
-            :value => record_value,
-            :empty => record_value.to_s.gsub(/\x00/n,'').length == 0,
-            :decoded => decoded
-          }
-        end
+        pssh_data = stream.read(@pssh_data_size)
+        @pro_records = PsshBox.decode_playready_pssh(pssh_data)
       end
     end
   end
@@ -2376,6 +2416,8 @@ class Mp4vSubBox < SubBoxWithSubBoxes
   handles 'hvc1', 'HEVC Video Description'
   handles 'jpeg', 'JPEG Video Description'
   handles 'hdva', 'HDV Video Description'
+  handles 'mjpa', 'Apple Motion JPEG A'
+  handles 'mjpb', 'Apple Motion JPEG B'
 
   handles 'encv', 'Encrypted Video Description'
 
