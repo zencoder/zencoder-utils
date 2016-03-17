@@ -2414,6 +2414,7 @@ class Mp4vSubBox < SubBoxWithSubBoxes
   handles 'mp4v', 'MP4 Video Description'
   handles 'avc1', 'H264 Video Description'
   handles 'hvc1', 'HEVC Video Description'
+  handles 'hev1', 'HEVC Video Description'
   handles 'jpeg', 'JPEG Video Description'
   handles 'hdva', 'HDV Video Description'
   handles 'mjpa', 'Apple Motion JPEG A'
