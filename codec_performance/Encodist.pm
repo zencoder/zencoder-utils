@@ -115,8 +115,8 @@ sub run
       print "$frames, $br, $psnr\n";
     }
 
-    printf LOG ("i: $i\n");
-    printf LOG ("cpu: %-10.3f\t cpu_prev: %-10.3f\n", $cpu, $cpu_prev);
+    printf LOG "i: $i\n";
+    printf LOG "cpu: %-10.3f\t cpu_prev: %-10.3f\n", $cpu, $cpu_prev;
     printf LOG "real %-10.3f\t real_prev %-10.3f\n", $real, $real_prev;
     $cpu_prev = $cpu;
     $real_prev = $real;
