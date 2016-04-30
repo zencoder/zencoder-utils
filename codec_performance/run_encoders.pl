@@ -10,10 +10,10 @@ use strict;
 my %vp9 = (
 '--encoder' => 'vpxenc',
 '--codec' => 'vp9',
-'--lag-in-frames' => 0,
-'--cpu-used' => [ 4, 6, 8 ],
+'--lag-in-frames' => [ 0 .. 4 ],
+'--cpu-used' => [ 5 .. 9 ],
 '--threads' => 8,
-'--target-bitrate' => '4000',
+#'--target-bitrate' => '4000',
 '--passes' => 1,
 '--pass' => 1,
 '--i420' => undef,
@@ -96,12 +96,12 @@ my %dec = (
 '-ss' => '1.0',
 );
 
-my $infile = 'tearsofsteel_4k.mov';
+my $infile = '/mnt/hgfs/work/sources/tearsofsteel_4k.mov';
 
 my $enc_vp9 = Encodist->new(%vp9);
 $enc_vp9->set_decode_settings(%dec);
 $enc_vp9->set_input_file($infile);
-$enc_vp9->set_output_file('csv_vp9.txt');
+#$enc_vp9->set_output_file('csv_vp9.txt');
 $enc_vp9->run();
 
 #my $enc_264 = Encodist->new(%h264);

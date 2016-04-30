@@ -11,7 +11,7 @@ sub new
   my @com = @_;
   my $self = {};
 
-  bless( $self, $class );
+  bless $self, $class;
 
   $self->{name} = $class;
   $self->{settings} = \@com;
@@ -24,9 +24,13 @@ sub set_input_file
 {
   my $self = shift;
   my $infile = shift;
-  
+
   die "input file not found: $infile\n" unless (-f $infile);
   $self->{infile} = $infile;
+
+  #replace tmpinfile
+  $self->{decode} =~ s/tmpinfile/$infile/ if exists $self->{decode};
+  #FIXME: handle array of input files
 
   return $self;
 }
@@ -38,6 +42,8 @@ sub set_output_file
 
   open (OUT, ">$outfile") or die "can't open output file: $outfile\n";
   select OUT;
+  
+  $self->{outfile} = $outfile; #FIXME: turn this into output base name
 
   return $self;
 }
@@ -48,6 +54,10 @@ sub set_decode_settings
   my $dec_options = join(' ', @_);
 
   $self->{decode} = "ffmpeg -loglevel verbose -y " . $dec_options;
+  my $tmpfile = $self->{infile} ? $self->{infile} : 'tmpinfile';
+  $self->{decode} .= " -i $tmpfile -f yuv4mpegpipe -";
+
+  #optional
   #$self->{decode} .= "-r 24/1 -an -map 0:0 -pix_fmt yuv420p ";
   #$self->{decode} .= "-sws_flags lanczos -vf [in]scale=3840:1714,setsar=sar=1/1[processed] ";
 
@@ -56,23 +66,44 @@ sub set_decode_settings
 
 sub run
 {
-  #overview: form command line, run codecs and track cpu time
-  #collect the output: settings tested, times, num of frames, bitrate, psrn/ssim, output file size,
-  #print the output in csv if output filename given else stdout
+  #overview: run the processing for each Processor object in the grid
+  #get the results from each object and write to csv
   my $self = shift;
 
   #verify input
-  die "no input file given\n" unless defined ($self->{infile});
-  my $infile = $self->{infile};
+  die "no input file given\n" unless defined $self->{infile};
 
-  #decoding settings
-  my $decode;
-  if ( !defined($self->{decode}) ) { #nothing provided, set some defaults
+  #verify decoding settings
+  if ( !defined $self->{decode} ) { #nothing provided, lets set some defaults
     my %dec_settings = ('-threads' => 4, '-t' => '15.00', '-ss' => '10.00');
     $self->set_decode_settings(%dec_settings);
   }
-  $decode = $self->{decode};
-  $decode .= " -i $infile -f yuv4mpegpipe -";
+
+  #FIXME: send $self->{outfile} to grid
+
+  $_->process($self->{decode}) for @{$self->{grid}}; #at this point 'decode' is the only 
+                                                     #var processors don't have yet
+
+  my @metrics = ('bitrate', 'frames', 'psnr');
+  for my $proc ( @{$self->{grid}} ) {
+    my %job = $proc->results('job_number', 'cmd_extra', @metrics);
+    my $n = $job{'job_number'};
+
+    if ( $n == 0 )  {  #print the heading
+      print "#n, ";
+      print /--(\S+)=\d+|\w+/, ", " for @{$job{'cmd_extra'}}; 
+      print "$_, " for @metrics; 
+    }
+
+    print "\n$n, ";
+    print /--\S+=(\d+|\w+)/, ", " for @{$job{'cmd_extra'}}; #NOTE: no dashes allowed in $val
+    print "$job{$_}, " for @metrics;
+  }
+
+  print "\n";
+
+
+=begin
 
   #print "$self->{cl_base}\n\n";
   #print "@{ $_ }\n" for (@{$self->{cls}});
@@ -123,6 +154,8 @@ sub run
     $i++;
   }
 
+=cut
+
   return $self;
 }
 
@@ -133,13 +166,15 @@ sub _init
 {
   my $self = shift;
 
-  #create array of command lines from $self->{settings}, store in $self
+  my @grid;
+   
+  #create array of command lines from $self->{settings}
   my %settings = @{$self->{settings}};
-  my ($cl_base, %ranges, @cls_to_run);
+  my ($cl_base, %ranges);
 
   #encoder name, handle it separately
   $cl_base .= delete ${settings{'--encoder'}};
-  $self->{encoder} = $cl_base;
+  $self->{encoder} = $cl_base; #FIXME remove
 
   #common part of all command lines
   while ( my ($key, $val) = each %settings ) {
@@ -161,15 +196,14 @@ sub _init
   }
   keys %ranges;
 
-  push @cls_to_run, $_ for _cross_product(@ranges_arr);
+  #create the processors and put them all in the grid
+  push @grid, Processor->new($_) for _cross_product(@ranges_arr);
+  $_->{cmd} = $cl_base for @grid;
 
-  $self->{cls} = \@cls_to_run;
-  $self->{ranges} = \%ranges;
-  $self->{cl_base} = $cl_base;
-
-  #check for 2 pass
-  $self->_two_pass();
+  #TODO: get aws machine instance type
   
+  $self->{grid} = \@grid;
+
   return $self;
 }
 
@@ -309,6 +343,88 @@ sub _frames_bitrate_psnr {
 
   return ($frames, $br, $psnr);
 }
+
+package Processor;
+use strict;
+
+my $jn = 0;
+
+sub new
+{
+  my $class = shift;
+  my $cmd_ex = shift;
+  my $self = {
+    #encoder
+    decode => 0,
+    cmd => 0,
+    cmd_extra => 0,
+    job_number => 0,
+    #input file
+    #output dir
+    #log_file
+    #output csv file
+    #output video file
+    two_pass => 0, 
+    #results:
+    cpu_time => 0,
+    real_time => 0,
+    frames => 32,
+    bitrate => 99,
+    psnr => 51.05,
+    ssim => 0,
+    out_file_sz => 0,
+  };
+
+
+  bless $self, $class;
+
+  #$self->{cmd_extra} = join ' ', @$cmd_ex;
+  $self->{cmd_extra} = $cmd_ex;
+  $self->{job_number} = $jn++;
+
+  return $self;
+}
+
+sub process {
+  my $self = shift;
+
+  $self->{decode} = shift;
+
+  #$self->reveal;
+
+  #my $i = 0;
+  #while (my @ci = caller($i++)) {
+  #    print "$i ___ ".$ci[1].':'.$ci[2]. "   " .$ci[4]. "   " . $ci[6]."\n";
+  #}
+  
+  #check 2pass 
+  #form cmd 
+  #benchmark
+  #system($cmd);
+  #benchmark
+
+  return $self;
+}
+
+sub reveal {
+  my $self = shift;
+  print "$self->{job_number}\t$self->{decode}\n";
+  print "$self->{cmd}\n";
+  print "@{$self->{cmd_extra}}\n\n";
+}
+
+
+sub results {
+
+  my $self = shift;
+  my @wanted = @_;
+
+  my %res_hash;
+
+  $res_hash{$_} = $self->{$_} for @wanted;
+  #print "$res_hash{$_}\n" for keys %res_hash;
+  return %res_hash;
+} 
 
 1;
 
