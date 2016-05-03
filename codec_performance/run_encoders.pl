@@ -10,10 +10,10 @@ use strict;
 my %vp9 = (
 '--encoder' => 'vpxenc',
 '--codec' => 'vp9',
-'--lag-in-frames' => [ 0 .. 4 ],
-'--cpu-used' => [ 5 .. 9 ],
+'--lag-in-frames' => [ 16, 25 ],
+'--cpu-used' => [ 4, 8 ],
 '--threads' => 8,
-#'--target-bitrate' => '4000',
+'--target-bitrate' => '4000',
 '--passes' => 1,
 '--pass' => 1,
 '--i420' => undef,
@@ -45,7 +45,7 @@ my %vp9 = (
 my %h264 = (
 '--encoder' => 'obe-vod',
 '--level' => '5.1',
-'--threads' =>  [ 4, 8, 12 ],
+'--threads' =>  [ 8, 12 ],
 '--bitrate' => 8000,
 '--demuxer' =>  'y4m',
 '--preset' =>  'faster',
@@ -67,7 +67,7 @@ my %h264 = (
 
 my %hevc = (
 '--encoder' => 'x265',
-'--frame-threads' => [ 6 .. 8],
+'--frame-threads' => [ 6, 8],
 '--input' => '-',
 '--bitrate' => 4000,
 '--y4m' => undef,
@@ -92,27 +92,30 @@ my %hevc = (
 
 my %dec = (
 '-threads' => 4,
-'-t' => '5.00',
-'-ss' => '1.0',
+'-t' => '10.00',
+#'-ss' => '210.00',
 );
 
 my $infile = '/mnt/hgfs/work/sources/tearsofsteel_4k.mov';
+#my $infile = 'tearsofsteel_4k.mov';
+
+my $enc_264 = Encodist->new(%h264);
+$enc_264->set_input_file($infile);
+$enc_264->set_decode_settings(%dec);
+$enc_264->set_output_name('out_264');
+$enc_264->run();
 
 my $enc_vp9 = Encodist->new(%vp9);
-$enc_vp9->set_decode_settings(%dec);
 $enc_vp9->set_input_file($infile);
-#$enc_vp9->set_output_file('csv_vp9.txt');
+$enc_vp9->set_decode_settings(%dec);
+$enc_vp9->set_output_name('out_vp9');
 $enc_vp9->run();
 
-#my $enc_264 = Encodist->new(%h264);
-#$enc_264->set_input_file($infile);
-#$enc_264->set_output_file('csv_264.txt');
-#$enc_264->run();
-
-#my $enc_265 = Encodist->new(%hevc);
-#$enc_265->set_input_file($infile);
-#$enc_265->set_output_file('csv_265.txt');
-#$enc_265->run();
+my $enc_hevc = Encodist->new(%hevc);
+$enc_hevc->set_input_file($infile);
+$enc_hevc->set_decode_settings(%dec);
+$enc_hevc->set_output_name('out_hevc');
+$enc_hevc->run();
 
 
 

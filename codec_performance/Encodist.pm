@@ -1,9 +1,10 @@
-#!/usr/bin/perl -w
+#!/usr/bin/perl
 
 package Encodist;
 use strict;
-use Time::HiRes;
-use Benchmark ':hireswallclock';
+use warnings;
+
+my $jn;
 
 sub new
 {
@@ -35,15 +36,15 @@ sub set_input_file
   return $self;
 }
 
-sub set_output_file 
+sub set_output_name
 {
   my $self = shift;
-  my $outfile = shift;
+  my $outname = shift;
 
-  open (OUT, ">$outfile") or die "can't open output file: $outfile\n";
+  open (OUT, ">$outname.csv") or die "can't open output file: $outname.csv\n";
   select OUT;
   
-  $self->{outfile} = $outfile; #FIXME: turn this into output base name
+  $self->{outname} = $outname;
 
   return $self;
 }
@@ -66,7 +67,7 @@ sub set_decode_settings
 
 sub run
 {
-  #overview: run the processing for each Processor object in the grid
+  #overview: run process() for each Processor object in the grid
   #get the results from each object and write to csv
   my $self = shift;
 
@@ -79,17 +80,15 @@ sub run
     $self->set_decode_settings(%dec_settings);
   }
 
-  #FIXME: send $self->{outfile} to grid
+  my @enc = ($self->{encoder}, $self->{decode}, $self->{outname});
+  my @metrics = ('br', 'frames', 'psnr', 'real', 'cpu', 'outfile_sz');
 
-  $_->process($self->{decode}) for @{$self->{grid}}; #at this point 'decode' is the only 
-                                                     #var processors don't have yet
-
-  my @metrics = ('bitrate', 'frames', 'psnr');
   for my $proc ( @{$self->{grid}} ) {
+    $proc->process(@enc);
     my %job = $proc->results('job_number', 'cmd_extra', @metrics);
     my $n = $job{'job_number'};
 
-    if ( $n == 0 )  {  #print the heading
+    if ( $n == 0 )  { #print the heading
       print "#n, ";
       print /--(\S+)=\d+|\w+/, ", " for @{$job{'cmd_extra'}}; 
       print "$_, " for @metrics; 
@@ -101,60 +100,6 @@ sub run
   }
 
   print "\n";
-
-
-=begin
-
-  #print "$self->{cl_base}\n\n";
-  #print "@{ $_ }\n" for (@{$self->{cls}});
-   
-  #Log file
-  open (LOG, ">encodist.log") or die "can't open log file: encodist.log\n";
-
-  my @range_vars = keys (%{ $self->{ranges} });
-  $_ =~ s/--// for (@range_vars);
-  print "#n, ",join(", ",@range_vars),", ";
-  print "cpu, real, frames, bitrate, psnr\n";
-
-  my $suf = $self->{encoder} eq 'x265' ? 'hevc' : 'mkv -';
-  my $i = 0;
-  my $cpu_prev = 0;
-  my $real_prev = 0;
-
-  for ( @{$self->{cls}} ) { #main loop
-    my $cmd_line = "$decode 2>vid_dec_$i.log | ";
-    $cmd_line .= "$self->{cl_base} @{ $_ } -o enc.video_$i.$suf 2>vid_enc_$i.log";
-    
-    print LOG "\n\n$cmd_line\n";
-    my $t0 = Benchmark->new;
-    system ("$cmd_line");
-    my $t1 = Benchmark->new;
-
-    my ($real, $cpu) = $self->_real_cpu_times($t0, $t1);
-
-    #for 2 pass, only output every other run of codec
-    if ( !$self->{two_pass} or $i%2 ) {
-      print "$i, ";
-      $self->_print_range_vars($cmd_line, @range_vars);
-      if ( $self->{two_pass} ) {
-        print "${\($cpu + $cpu_prev)}, ${\($real + $real_prev)}, ";
-      }
-      else {
-        print "$cpu, $real, ";
-      }
-      my ($frames, $br, $psnr) = $self->_frames_bitrate_psnr("vid_enc_$i.log");
-      print "$frames, $br, $psnr\n";
-    }
-
-    printf LOG "i: $i\n";
-    printf LOG "cpu: %-10.3f\t cpu_prev: %-10.3f\n", $cpu, $cpu_prev;
-    printf LOG "real %-10.3f\t real_prev %-10.3f\n", $real, $real_prev;
-    $cpu_prev = $cpu;
-    $real_prev = $real;
-    $i++;
-  }
-
-=cut
 
   return $self;
 }
@@ -197,6 +142,7 @@ sub _init
   keys %ranges;
 
   #create the processors and put them all in the grid
+  $jn = 0;
   push @grid, Processor->new($_) for _cross_product(@ranges_arr);
   $_->{cmd} = $cl_base for @grid;
 
@@ -221,55 +167,155 @@ sub _cross_product {
   return @ret;
 }
 
-sub _two_pass {
-  my $self = shift;
-  my %settings = @{$self->{settings}};
 
-  unless ( exists $settings{'--target-bitrate'} or exists $settings{'--bitrate'} ) {
-    return;
-  }
+package Processor;
+use strict;
+use warnings;
+use Time::HiRes;
+use Benchmark ':hireswallclock';
 
-  #add 1 pass and 2 pass command lines for each
-  #command line and put them in the cls array,
-  #replacing what is currently there
-  my (@temp_cls, $br);
-  $self->{two_pass} = 1;
+sub new
+{
+  my $class = shift;
+  my $cmd_ex = shift;
+  my $self = {
+    encoder => '',         #codec name
+    decoder => '',         #decoder and options
+    cmd => '',             #base command line
+    cmd_extra => '',       #cmd line options ranges
+    multipass_cmds => '',  #if bitrate is given
+    job_number => -1,
+    #results:
+    outdir => '',          #output directory name
+    real => 0,             #wallclock time
+    cpu => 0,              #cpu time (user + system)
+    frames => 0,           #number of frames processed
+    br => 0,               #bitrate in Kbps
+    psnr => 0,
+    ssim => 0,
+    outfile_sz => 0,       #size in bytes of output video
+  };
 
-  for ( @{$self->{cls}} ) {
-    if ( $self->{encoder} eq "vpxenc" ) {
-      $self->{cl_base} =~ s/--passes=\d //g;
-      $self->{cl_base} =~ s/--pass=\d //g;
-      #todo: for first pass, use lag-in-frames=0 ?
-      $br = $settings{'--target-bitrate'};
-      push @temp_cls, [ "--minsection-pct=10 --maxsection-pct=800 --fpf=vpx_2pass.log --target-bitrate=$br --passes=2 --pass=1 @{$_} " ];
-      push @temp_cls, [ "--minsection-pct=10 --maxsection-pct=800 --fpf=vpx_2pass.log --target-bitrate=$br --passes=2 --pass=2 @{$_} " ];
-    }
-    elsif ( $self->{encoder} eq "obe-vod" or $self->{encoder} eq "x265" ) {
-      $br = $settings{'--bitrate'};
-      push @temp_cls, [ "--pass=1 --stats=encoder_2pass.log --bitrate=$br @{$_} " ];
-      push @temp_cls, [ "--pass=2 --stats=encoder_2pass.log --bitrate=$br @{$_} " ];
-    }
-    else {
-      die "encoder name not recognized\n";
-    }
-  }
+  bless $self, $class;
 
-  $self->{cls} = \@temp_cls;
-  return;
+  #$self->{cmd_extra} = join ' ', @$cmd_ex;
+  $self->{cmd_extra} = $cmd_ex;
+  $self->{job_number} = $jn++;
+
+  return $self;
 }
 
-sub _print_range_vars {
-
+sub process {
   my $self = shift;
-  my $cmd_line = shift;
-  my @range_vars = @_;
+  $self->{encoder} = shift;
+  $self->{decoder} = shift;
+  my $outname = shift || "_out";
 
-  foreach my $var (@range_vars) {
-    my ($wanted) = $cmd_line =~ /$var=(\d+|\w+)/;
-    die "encodist: couldn't find $wanted $!" unless defined $wanted;
-    print "$wanted, ";
+  my $j = $self->{job_number};
+  my $outdir = "$outname"."_$j";
+  $self->{outdir} = $outdir;
+  mkdir $outdir;
+
+  #Log file
+  open (LOG, ">$outdir/encodist.log") or die "can't open log file: $outdir/encodist.log\n";
+
+  my $suf = $self->{encoder} eq 'x265' ? 'hevc' : 'mkv -';
+
+  print LOG "$j  @{$self->{cmd_extra}}\n";
+  print LOG "outname: $outname      outdir: $outdir\n";
+  print LOG "decoder: $self->{decoder}\n";
+  print LOG "encoder: $self->{encoder}   $suf\n";
+
+  if ( $self->_multipass ) {
+    my ($real_step, $cpu_step) = 0;
+    print LOG "***2pass***:\n";
+    foreach ( @{$self->{multipass_cmds}} ) {
+      print LOG "\n$_\n";
+
+      my $t0 = Benchmark->new;
+      system ($_);
+      my $t1 = Benchmark->new;
+
+      ($real_step, $cpu_step) = $self->_real_cpu_times($t0, $t1);
+
+      print LOG "      real: $real_step,   cpu: $cpu_step\n";
+      $self->{real} += $real_step;
+      $self->{cpu} += $cpu_step;
+    }
+    print LOG "total real: $self->{real},   cpu: $self->{cpu}\n";
+  }
+  else {
+    my $cmd_line = "$self->{decoder} 2>$outdir/vid_dec.log | ";
+    $cmd_line .= "$self->{cmd} @{$self->{cmd_extra}} -o $outdir/enc.video.$suf 2>$outdir/vid_enc.log";
+    print LOG "$cmd_line\n";
+
+    my $t0 = Benchmark->new;
+    system ($cmd_line);
+    my $t1 = Benchmark->new;
+
+    ($self->{real}, $self->{cpu}) = $self->_real_cpu_times($t0, $t1);
+    print LOG "      real: $self->{real},   cpu: $self->{cpu}\n";
   }
 
+  ($self->{frames}, $self->{br}, $self->{psnr}) = $self->_frames_bitrate_psnr("$outdir/vid_enc.log");
+  $suf =~ s/ -//;
+  $self->{outfile_sz} = -s "$outdir/enc.video.$suf";
+
+  return $self;
+}
+
+sub reveal {
+  my $self = shift;
+  print "$self->{job_number}\t$self->{decoder}\n";
+  print "$self->{cmd}\n";
+  print "@{$self->{cmd_extra}}\n\n";
+}
+
+sub results {
+
+  my $self = shift;
+  my @wanted = @_;
+
+  my %res_hash;
+  $res_hash{$_} = $self->{$_} for @wanted;
+  return %res_hash;
+}
+
+sub _multipass {
+  my $self = shift;
+
+  return 0 unless ( $self->{cmd} =~ /bitrate/ );
+
+  my (@passes, @cmds);
+
+  my $suf = $self->{encoder} eq 'x265' ? 'hevc' : 'mkv -';
+  my $out = $self->{outdir};
+
+  if ( $self->{encoder} eq "vpxenc" ) {
+    $self->{cmd} =~ s/--passes=\d //g;
+    $self->{cmd} =~ s/--pass=\d //g;
+    #TODO: for first pass, use lag-in-frames=0 ?
+    push @passes, "--minsection-pct=10 --maxsection-pct=800 --fpf=$out/vpx_2pass.log --passes=2 --pass=1 ";
+    push @passes, "--minsection-pct=10 --maxsection-pct=800 --fpf=$out/vpx_2pass.log --passes=2 --pass=2 ";
+
+  }
+  elsif ( $self->{encoder} eq "obe-vod" or $self->{encoder} eq "x265" ) {
+    push @passes, "--pass=1 --stats=$out/encoder_2pass.log ";
+    push @passes, "--pass=2 --stats=$out/encoder_2pass.log ";
+  }
+  else {
+    die "encoder name not recognized\n";
+  }
+
+  for (@passes) {
+    my $cmdline = "$self->{decoder} 2>$out/vid_dec.log | ";
+    $cmdline .= "$self->{cmd} @{$self->{cmd_extra}} $_ -o $out/enc.video.$suf 2>$out/vid_enc.log";
+    push @cmds, $cmdline;
+  }
+
+  $self->{multipass_cmds} = \@cmds;
+
+  return 1;
 }
 
 sub _real_cpu_times {
@@ -286,30 +332,6 @@ sub _real_cpu_times {
   ($cpu) = $elapsed =~ /\s+(\d+\.\d+)\s+CPU\)/;
 
   return ($real, $cpu);
-}
-
-sub _cpu_time {
-  #obsolete, use _real_cpu_times
-  my $self = shift;
-  my ($user,$system,$cuser,$csystem,$cuser_diff,$csystem_diff);
-
-  ($user,$system,$cuser,$csystem) = times;
-
-  #$cuser_diff = $cuser - $self->{cuser_p};
-  #$csystem_diff = $csystem - $self->{csystem_p};
-
-  #print "          cuser: $cuser\n";
-  #print "        csystem: $csystem\n";
-  #print "  self->cuser_p: $self->{cuser_p}\n";
-  #print "self->csystem_p: $self->{csystem_p}\n";
-  #print "        cuser_d: $cuser_diff\n";
-  #print "      csystem_d: $csystem_diff\n";
-  #print "                 ${\($cuser_diff + $csystem_diff)}\n";
-
-  #$self->{cuser_p} = $cuser;
-  #$self->{csystem_p} = $csystem;
-
-  return $cuser_diff + $csystem_diff;
 }
 
 sub _frames_bitrate_psnr {
@@ -343,88 +365,6 @@ sub _frames_bitrate_psnr {
 
   return ($frames, $br, $psnr);
 }
-
-package Processor;
-use strict;
-
-my $jn = 0;
-
-sub new
-{
-  my $class = shift;
-  my $cmd_ex = shift;
-  my $self = {
-    #encoder
-    decode => 0,
-    cmd => 0,
-    cmd_extra => 0,
-    job_number => 0,
-    #input file
-    #output dir
-    #log_file
-    #output csv file
-    #output video file
-    two_pass => 0, 
-    #results:
-    cpu_time => 0,
-    real_time => 0,
-    frames => 32,
-    bitrate => 99,
-    psnr => 51.05,
-    ssim => 0,
-    out_file_sz => 0,
-  };
-
-
-  bless $self, $class;
-
-  #$self->{cmd_extra} = join ' ', @$cmd_ex;
-  $self->{cmd_extra} = $cmd_ex;
-  $self->{job_number} = $jn++;
-
-  return $self;
-}
-
-sub process {
-  my $self = shift;
-
-  $self->{decode} = shift;
-
-  #$self->reveal;
-
-  #my $i = 0;
-  #while (my @ci = caller($i++)) {
-  #    print "$i ___ ".$ci[1].':'.$ci[2]. "   " .$ci[4]. "   " . $ci[6]."\n";
-  #}
-  
-  #check 2pass 
-  #form cmd 
-  #benchmark
-  #system($cmd);
-  #benchmark
-
-  return $self;
-}
-
-sub reveal {
-  my $self = shift;
-  print "$self->{job_number}\t$self->{decode}\n";
-  print "$self->{cmd}\n";
-  print "@{$self->{cmd_extra}}\n\n";
-}
-
-
-sub results {
-
-  my $self = shift;
-  my @wanted = @_;
-
-  my %res_hash;
-
-  $res_hash{$_} = $self->{$_} for @wanted;
-  #print "$res_hash{$_}\n" for keys %res_hash;
-  return %res_hash;
-} 
 
 1;
 
