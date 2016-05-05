@@ -90,7 +90,7 @@ sub run
 
     if ( $n == 0 )  { #print the heading
       print "#n, ";
-      print /--(\S+)=\d+|\w+/, ", " for @{$job{'cmd_extra'}}; 
+      print /--(\S+)=/, ", " for @{$job{'cmd_extra'}};
       print "$_, " for @metrics; 
     }
 
