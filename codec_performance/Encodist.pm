@@ -6,8 +6,7 @@ use warnings;
 
 my $jn;
 
-sub new
-{
+sub new {
   my $class = shift; # $_[0] contains the class name
   my @com = @_;
   my $self = {};
@@ -21,8 +20,7 @@ sub new
   return $self;
 }
 
-sub set_input_file 
-{
+sub set_input_file {
   my $self = shift;
   my $infile = shift;
 
@@ -31,13 +29,11 @@ sub set_input_file
 
   #replace tmpinfile
   $self->{decode} =~ s/tmpinfile/$infile/ if exists $self->{decode};
-  #FIXME: handle array of input files
 
   return $self;
 }
 
-sub set_output_name
-{
+sub set_output_name {
   my $self = shift;
   my $outname = shift;
 
@@ -49,13 +45,12 @@ sub set_output_name
   return $self;
 }
 
-sub set_decode_settings 
-{
+sub set_decode_settings {
   my $self = shift;
   my $dec_options = join(' ', @_);
 
   $self->{decode} = "ffmpeg -loglevel verbose -y " . $dec_options;
-  my $tmpfile = $self->{infile} ? $self->{infile} : 'tmpinfile';
+  my $tmpfile = $self->{infile} || 'tmpinfile';
   $self->{decode} .= " -i $tmpfile -f yuv4mpegpipe -";
 
   #optional
@@ -65,8 +60,7 @@ sub set_decode_settings
   return $self;
 }
 
-sub run
-{
+sub run {
   #overview: run process() for each Processor object in the grid
   #get the results from each object and write to csv
   my $self = shift;
@@ -80,8 +74,8 @@ sub run
     $self->set_decode_settings(%dec_settings);
   }
 
-  my @enc = ($self->{encoder}, $self->{decode}, $self->{outname});
-  my @metrics = ('br', 'frames', 'psnr', 'real', 'cpu', 'outfile_sz');
+  my @enc = ($self->{encoder}, $self->{decode}, $self->{outname}, $self->{aws});
+  my @metrics = qw/br frames psnr real cpu outfile_sz ext_psnr ext_ssim/;
 
   for my $proc ( @{$self->{grid}} ) {
     $proc->process(@enc);
@@ -107,10 +101,8 @@ sub run
 
 #internal methods
 
-sub _init
-{
+sub _init {
   my $self = shift;
-
   my @grid;
    
   #create array of command lines from $self->{settings}
@@ -119,7 +111,7 @@ sub _init
 
   #encoder name, handle it separately
   $cl_base .= delete ${settings{'--encoder'}};
-  $self->{encoder} = $cl_base; #FIXME remove
+  $self->{encoder} = $cl_base;
 
   #common part of all command lines
   while ( my ($key, $val) = each %settings ) {
@@ -146,7 +138,8 @@ sub _init
   push @grid, Processor->new($_) for _cross_product(@ranges_arr);
   $_->{cmd} = $cl_base for @grid;
 
-  #TODO: get aws machine instance type
+  #get aws machine instance type
+  $self->{aws} = `wget -q -O - http://instance-data/latest/meta-data/instance-type`;
   
   $self->{grid} = \@grid;
 
@@ -174,8 +167,7 @@ use warnings;
 use Time::HiRes;
 use Benchmark ':hireswallclock';
 
-sub new
-{
+sub new {
   my $class = shift;
   my $cmd_ex = shift;
   my $self = {
@@ -194,6 +186,8 @@ sub new
     psnr => 0,
     ssim => 0,
     outfile_sz => 0,       #size in bytes of output video
+    ext_psnr => 0,
+    ext_ssim => 0,
   };
 
   bless $self, $class;
@@ -210,6 +204,7 @@ sub process {
   $self->{encoder} = shift;
   $self->{decoder} = shift;
   my $outname = shift || "_out";
+  my $aws = shift || "unkown";
 
   my $j = $self->{job_number};
   my $outdir = "$outname"."_$j";
@@ -221,6 +216,7 @@ sub process {
 
   my $suf = $self->{encoder} eq 'x265' ? 'hevc' : 'mkv -';
 
+  print LOG "    aws: $aws\n";
   print LOG "$j  @{$self->{cmd_extra}}\n";
   print LOG "outname: $outname      outdir: $outdir\n";
   print LOG "decoder: $self->{decoder}\n";
@@ -238,11 +234,11 @@ sub process {
 
       ($real_step, $cpu_step) = $self->_real_cpu_times($t0, $t1);
 
-      print LOG "      real: $real_step,   cpu: $cpu_step\n";
+      print LOG "      real: $real_step    cpu: $cpu_step\n";
       $self->{real} += $real_step;
       $self->{cpu} += $cpu_step;
     }
-    print LOG "total real: $self->{real},   cpu: $self->{cpu}\n";
+    print LOG "total real: $self->{real}    cpu: $self->{cpu}\n";
   }
   else {
     my $cmd_line = "$self->{decoder} 2>$outdir/vid_dec.log | ";
@@ -254,12 +250,15 @@ sub process {
     my $t1 = Benchmark->new;
 
     ($self->{real}, $self->{cpu}) = $self->_real_cpu_times($t0, $t1);
-    print LOG "      real: $self->{real},   cpu: $self->{cpu}\n";
+    print LOG "      real: $self->{real}    cpu: $self->{cpu}\n";
   }
 
   ($self->{frames}, $self->{br}, $self->{psnr}) = $self->_frames_bitrate_psnr("$outdir/vid_enc.log");
   $suf =~ s/ -//;
   $self->{outfile_sz} = -s "$outdir/enc.video.$suf";
+
+  ($self->{ext_psnr}, $self->{ext_ssim}) = $self->_external_psnr_ssim;
+  print LOG " ext_psnr: $self->{ext_psnr}   ext_ssim: $self->{ext_ssim}\n";
 
   return $self;
 }
@@ -284,6 +283,7 @@ sub results {
 sub _multipass {
   my $self = shift;
 
+  #a bitrate setting implies multipass
   return 0 unless ( $self->{cmd} =~ /bitrate/ );
 
   my (@passes, @cmds);
@@ -364,6 +364,39 @@ sub _frames_bitrate_psnr {
   }
 
   return ($frames, $br, $psnr);
+}
+
+sub _external_psnr_ssim {
+
+  #local ffmpeg is required at this time
+  return (0, 0) unless (-f "ffmpeg/ffmpeg");
+
+  my $self = shift;
+  my $ffmp = "ffmpeg/ffmpeg";
+
+  my ($infile) = $self->{decoder} =~ / -i (\S+) /;
+  my ($insuf) = $infile =~ /\w+\.(\w+)/;
+
+  #first, need a reference file "trunc" with the same number of frames as the output
+  my $trunc = "$self->{outdir}/trunc.$insuf";
+  my $stats_out = "$self->{outdir}/ffmpeg_stats.out";
+
+  my $truncate = "$ffmp -y -i $infile -c:v copy -vframes $self->{frames} $trunc";
+  system($truncate);
+
+  #run local ffmpeg and write results to file
+  my $suf = $self->{encoder} eq 'x265' ? 'hevc' : 'mkv';
+  my $compute = "$ffmp -y -i $self->{outdir}/enc.video.$suf -i $trunc -lavfi \"ssim;[0:v][1:v]psnr\" -f null - >$stats_out 2>&1";
+  system($compute);
+
+  #extract ssim, psnr from ffmpeg output
+  my $res = readpipe "tail -2 $stats_out";
+
+  my ($ssim) = $res =~ /SSIM.*All:(\d+\.\d+)/;
+  my ($psnr) = $res =~ /PSNR.*average:(\d+\.\d+)/;
+
+  unlink $trunc;
+  return ($psnr, $ssim);
 }
 
 1;
