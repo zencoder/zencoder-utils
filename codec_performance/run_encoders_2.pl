@@ -7,13 +7,12 @@ use strict;
 #care of automatically. whatever values are put in the hash will be ignored.
 #if target-bitrate is not given, '--passes' => 1, '--pass' => 1, must be in the hash
 #if not, it will not run correctly
-my %vp9 = (
+my %vp9_q = (
 '--encoder' => 'vpxenc',
 '--codec' => 'vp9',
-'--lag-in-frames' => [ 0, 16 ],
-'--cpu-used' => 4,
+'--lag-in-frames' => [ 9 .. 12 ],
+'--cpu-used' => [ 2, 4, 6 ],
 '--threads' => 8,
-#'--target-bitrate' => '4000',
 '--passes' => 1,
 '--pass' => 1,
 '--i420' => undef,
@@ -42,13 +41,16 @@ my %vp9 = (
 #'--tune' => 'psnr',
 );
 
-my %h264 = (
+my %vp9_b = %vp9_q;
+$vp9_b{'--target-bitrate'} = 4000;
+
+
+my %h264_q = (
 '--encoder' => 'obe-vod',
 '--level' => '5.1',
 '--threads' =>  [ 8, 16 ],
-#'--bitrate' => 8000,
 '--demuxer' =>  'y4m',
-'--preset' => 'faster',
+'--preset' =>  'faster',
 '--input-depth' =>  8,
 '--ref' =>  3,
 '--bframes' =>  0,
@@ -64,12 +66,13 @@ my %h264 = (
 '--output-csp' => 'i420'
 );
 
+my %h264_b = %h264_q;
+$h264_b{'--bitrate'} = 8000;
 
-my %hevc = (
+my %hevc_q = (
 '--encoder' => 'x265',
 '--frame-threads' => [ 6, 8 ],
 '--input' => '-',
-'--bitrate' => 4000,
 '--y4m' => undef,
 '--input-res' => '3840x1714',
 '--log-level' => 'info',
@@ -90,32 +93,51 @@ my %hevc = (
 '--psnr' => undef
 );
 
+my %hevc_b = %hevc_q;
+$hevc_b{'--bitrate'} = 4000;
+
+
 my %dec = (
 '-threads' => 4,
-'-t' => '30.00',
+'-t' => '70.00',
 #'-ss' => '210.00',
 );
 
-#my $infile = '/mnt/hgfs/work/sources/tearsofsteel_4k.mov';
 my $infile = 'tearsofsteel_4k.mov';
 
-my $enc_264 = Encodist->new(%h264);
+my $enc_264 = Encodist->new(%h264_b);
 $enc_264->set_input_file($infile);
 $enc_264->set_decode_settings(%dec);
-$enc_264->set_output_name('out_264');
+$enc_264->set_output_name('z_264_b');
 $enc_264->run();
 
-my $enc_vp9 = Encodist->new(%vp9);
+my $enc_264_q = Encodist->new(%h264_q);
+$enc_264_q->set_input_file($infile);
+$enc_264_q->set_decode_settings(%dec);
+$enc_264_q->set_output_name('z_264_q');
+$enc_264_q->run();
+
+my $enc_hevc = Encodist->new(%hevc_b);
+$enc_hevc->set_input_file($infile);
+$enc_hevc->set_decode_settings(%dec);
+$enc_hevc->set_output_name('z_hevc_b');
+$enc_hevc->run();
+my $enc_hevc_q = Encodist->new(%hevc_q);
+$enc_hevc_q->set_input_file($infile);
+$enc_hevc_q->set_decode_settings(%dec);
+$enc_hevc_q->set_output_name('z_hevc_q');
+$enc_hevc_q->run();
+
+my $enc_vp9 = Encodist->new(%vp9_b);
 $enc_vp9->set_input_file($infile);
 $enc_vp9->set_decode_settings(%dec);
-$enc_vp9->set_output_name('out_vp9');
+$enc_vp9->set_output_name('z_vp9_b');
 $enc_vp9->run();
-
-#my $enc_hevc = Encodist->new(%hevc);
-#$enc_hevc->set_input_file($infile);
-#$enc_hevc->set_decode_settings(%dec);
-#$enc_hevc->set_output_name('out_hevc');
-#$enc_hevc->run();
+my $enc_vp9_q = Encodist->new(%vp9_q);
+$enc_vp9_q->set_input_file($infile);
+$enc_vp9_q->set_decode_settings(%dec);
+$enc_vp9_q->set_output_name('z_vp9_q');
+$enc_vp9_q->run();
 
 
 
