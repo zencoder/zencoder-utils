@@ -78,7 +78,7 @@ The following data points are collected for each run of each codec:
   * the value of each parameter for which a range was given
   * bitrate
   * number of frames
-  * self reported psnr
+  * codec self reported psnr
   * real (wallclock) time 
   * cpu (user+system) time
   * output video file size 
@@ -87,7 +87,7 @@ The following data points are collected for each run of each codec:
   * the aws instance type that was used
 
 Additionally, the decoder and encoder commands, as well as the decode->encode pipe command for which the timing benchmarks were
-calculated are writted to the `encodist.log` file.
+calculated are written to the `encodist.log` file.
 
 If no output name is provided (set\_output\_name() is not called), Encodist will output the csv data to sdtout. This
 can be redirected to a file to collect all the output from all runs together. This is discouraged since
