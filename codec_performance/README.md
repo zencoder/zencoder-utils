@@ -4,14 +4,14 @@ Encodist is a perl module and sample scripts that run encoding jobs and measure 
 
 **Encodist\.pm**: Perl module
 
-**run\_encoders.pl**: sample program scripts that show how the use the Encodist object.
+**run\_encoders.pl**: sample program scripts that show how to use the Encodist object.
 
 **plotting/**: Directory of example .gp files which can be used with gnuplot to plot a wide range of output values.
 Automating the creation of plots is TBD.
 
 #### Quick Start Example
 
-Create a hash with the desired codec settings, instantiate and configure an Encodist object, and call it's run method:
+Create a hash with the desired codec settings, instantiate and configure an Encodist object, and call its run method:
 
     #!/usr/bin/perl -w
     use Encodist;
@@ -50,7 +50,7 @@ For any settings which are given as an array [ ], each value will be tried in a 
 In this example Encodist will use obe-vod to encode the first minute of tears of steel 4 times: 8 threads with faster preset,
 16 threads with faster preset, 8 threads with medium preset and 16 threads with medium preset.
 
-The values passed to set\_decoder\_settings() should be understandable by ffmpeg decoder.
+The values passed to set\_decoder\_settings() should be understandable by the ffmpeg decoder.
 
 The collected outputs will be put
 in an output file `out_264.csv` and a directory `out_264` will contain the output decoder 
@@ -100,6 +100,9 @@ Another alternative is to create several Encodist objects, but only provide an o
 This single name will be used for all runs for the csv output and the base name for the output dirs.
 
 
+#### More Info
+
+https://docs.google.com/a/brightcove.com/document/d/1SrhXxpCl06loCK23NRMtFVkb4n10H9hSagNye1sxEuc/edit?usp=sharing
 
 
 
