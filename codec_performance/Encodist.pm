@@ -299,7 +299,7 @@ sub _multipass {
     push @passes, "--minsection-pct=10 --maxsection-pct=800 --fpf=$out/vpx_2pass.log --passes=2 --pass=2 ";
 
   }
-  elsif ( $self->{encoder} eq "obe-vod" or $self->{encoder} eq "x265" ) {
+  elsif ( $self->{encoder} eq "x264" or $self->{encoder} eq "obe-vod" or $self->{encoder} eq "x265" ) {
     push @passes, "--pass=1 --stats=$out/encoder_2pass.log ";
     push @passes, "--pass=2 --stats=$out/encoder_2pass.log ";
   }
@@ -347,7 +347,7 @@ sub _frames_bitrate_psnr {
     ($psnr) = $res =~ /U\/V\)\s+(\d+\.\d+)/;
     $br /= 1000;
   }
-  elsif ( $self->{encoder} eq "obe-vod" ) {
+  elsif ( $self->{encoder} eq "obe-vod" or $self->{encoder} eq "x264" ) {
     my $res = readpipe "tail -3 $logfile";
     ($frames) = $res =~ /encoded\s+(\d+)\s+frames/;
     ($br) = $res =~ /(\d+\.\d+) kb\/s$/;
