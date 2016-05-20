@@ -381,7 +381,9 @@ sub _external_psnr_ssim {
   my $trunc = "$self->{outdir}/trunc.$insuf";
   my $stats_out = "$self->{outdir}/ffmpeg_stats.out";
 
-  my $truncate = "$ffmp -y -i $infile -c:v copy -vframes $self->{frames} $trunc";
+  my $codeccopy = "";
+  $codeccopy = " -c:v copy " if ($insuf ne "y4m");
+  my $truncate = "$ffmp -y -i $infile $codeccopy -vframes $self->{frames} $trunc";
   system($truncate);
 
   #run local ffmpeg and write results to file
