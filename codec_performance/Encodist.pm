@@ -196,6 +196,8 @@ sub new {
   $self->{cmd_extra} = $cmd_ex;
   $self->{job_number} = $jn++;
 
+
+
   return $self;
 }
 
@@ -212,7 +214,7 @@ sub process {
   mkdir $outdir;
 
   #Log file
-  open (LOG, ">$outdir/encodist.log") or die "can't open log file: $outdir/encodist.log\n";
+  open (LOG, ">$outdir/encodist.log") or die "can't open log file: $outdir/encodist.log\n";  
 
   my $suf = $self->{encoder} eq 'x265' ? 'hevc' : 'mkv -';
 
@@ -376,6 +378,7 @@ sub _external_psnr_ssim {
 
   my ($infile) = $self->{decoder} =~ / -i (\S+) /;
   my ($insuf) = $infile =~ /\w+\.(\w+)/;
+  my ($fps) = $self->{cmd} =~ / --fps=(\d+)\/1 /;
 
   #first, need a reference file "trunc" with the same number of frames as the output
   my $trunc = "$self->{outdir}/trunc.$insuf";
@@ -388,7 +391,7 @@ sub _external_psnr_ssim {
 
   #run local ffmpeg and write results to file
   my $suf = $self->{encoder} eq 'x265' ? 'hevc' : 'mkv';
-  my $compute = "$ffmp -y -i $self->{outdir}/enc.video.$suf -i $trunc -lavfi \"ssim;[0:v][1:v]psnr\" -f null - >$stats_out 2>&1";
+  my $compute = "$ffmp -y -r $fps -i $self->{outdir}/enc.video.$suf -i $trunc -lavfi \"ssim;[0:v][1:v]psnr\" -f null - >$stats_out 2>&1";
   system($compute);
 
   #extract ssim, psnr from ffmpeg output
