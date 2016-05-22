@@ -196,8 +196,6 @@ sub new {
   $self->{cmd_extra} = $cmd_ex;
   $self->{job_number} = $jn++;
 
-
-
   return $self;
 }
 
@@ -206,7 +204,7 @@ sub process {
   $self->{encoder} = shift;
   $self->{decoder} = shift;
   my $outname = shift || "_out";
-  my $aws = shift || "unkown";
+  my $aws = shift || "unknown";
 
   my $j = $self->{job_number};
   my $outdir = "$outname"."_$j";
@@ -378,14 +376,14 @@ sub _external_psnr_ssim {
 
   my ($infile) = $self->{decoder} =~ / -i (\S+) /;
   my ($insuf) = $infile =~ /\w+\.(\w+)/;
-  my ($fps) = $self->{cmd} =~ / --fps=(\d+)\/1 /;
+  my $cmd_string = join ' ', $self->{cmd}, @{$self->{cmd_extra}};
+  my ($fps) = $cmd_string =~ / --fps=(\S+)\/1 /;
 
   #first, need a reference file "trunc" with the same number of frames as the output
   my $trunc = "$self->{outdir}/trunc.$insuf";
   my $stats_out = "$self->{outdir}/ffmpeg_stats.out";
 
-  my $codeccopy = "";
-  $codeccopy = " -c:v copy " if ($insuf ne "y4m");
+  my $codeccopy = $insuf ne 'y4m' ? ' -c:v copy ' : '';
   my $truncate = "$ffmp -y -i $infile $codeccopy -vframes $self->{frames} $trunc";
   system($truncate);
 
