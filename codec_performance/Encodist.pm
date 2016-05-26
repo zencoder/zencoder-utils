@@ -38,9 +38,10 @@ sub set_output_name {
   my $outname = shift;
 
   open (OUT, ">$outname.csv") or die "can't open output file: $outname.csv\n";
-  select OUT;
+  my $oldfh = select OUT;
   
   $self->{outname} = $outname;
+  $self->{oldfh} = $oldfh;
 
   return $self;
 }
@@ -94,6 +95,8 @@ sub run {
   }
 
   print "\n";
+  
+  select $self->{oldfh};
 
   return $self;
 }
