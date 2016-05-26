@@ -150,6 +150,7 @@ sub _init {
 }
 
 sub _cross_product {
+  return [] unless @_;
   my @input = @_;
   my @ret = map [$_], @{ shift @input };
 
