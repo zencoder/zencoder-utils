@@ -532,7 +532,7 @@ class TfhdBox < Box
     end
     if @default_sample_flags_present > 0
       print prefix
-      cputs "Default Sample Flags: #{@default_sample_flags}", :dark_gray
+      cputs "Default Sample Flags: 0x#{@default_sample_flags.to_s(16).ljust(8, '0')}", :dark_gray
       print_sample_flags(@default_sample_flags, prefix + '  ') if $VERBOSE
     end
     print prefix
@@ -613,6 +613,11 @@ class TrunBox < Box
     if @data_offset_present > 0
       print prefix
       cputs "Data Offset: #{@data_offset}", :dark_gray
+    end
+    if $VERBOSE && @first_sample_flags_present > 0
+      print prefix
+      cputs "First Sample Flags: 0x#{@first_sample_flags.to_s(16).ljust(8, '0')}", :dark_gray
+      print_sample_flags(@first_sample_flags, prefix + '  ') if $VERBOSE
     end
     print prefix
     cputs "Sample Count: #{@entry_count}", :dark_gray
