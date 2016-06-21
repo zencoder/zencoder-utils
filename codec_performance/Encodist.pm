@@ -83,7 +83,7 @@ sub run {
     my %job = $proc->results('job_number', 'cmd_extra', @metrics);
     my $n = $job{'job_number'};
 
-    if ( $n == 0 )  { #print the heading
+    if ( $n == 0 ) { #print the heading
       print "#n, ";
       print /--(\S+)=/, ", " for @{$job{'cmd_extra'}};
       print "$_, " for @metrics; 
@@ -95,9 +95,7 @@ sub run {
   }
 
   print "\n";
-  
   select $self->{oldfh};
-
   return $self;
 }
 
@@ -372,11 +370,7 @@ sub _frames_bitrate_psnr {
 
 sub _external_psnr_ssim {
 
-  #local ffmpeg is required at this time
-  return (0, 0) unless (-f "ffmpeg/ffmpeg");
-
   my $self = shift;
-  my $ffmp = "ffmpeg/ffmpeg";
 
   my ($infile) = $self->{decoder} =~ / -i (\S+) /;
   my ($insuf) = $infile =~ /\w+\.(\w+)/;
@@ -388,12 +382,12 @@ sub _external_psnr_ssim {
   my $stats_out = "$self->{outdir}/ffmpeg_stats.out";
 
   my $codeccopy = $insuf ne 'y4m' ? ' -c:v copy ' : '';
-  my $truncate = "$ffmp -y -i $infile $codeccopy -vframes $self->{frames} $trunc";
+  my $truncate = "ffmpeg -y -i $infile $codeccopy -vframes $self->{frames} $trunc";
   system($truncate);
 
   #run local ffmpeg and write results to file
   my $suf = $self->{encoder} eq 'x265' ? 'hevc' : 'mkv';
-  my $compute = "$ffmp -y -r $fps -i $self->{outdir}/enc.video.$suf -i $trunc -lavfi \"ssim;[0:v][1:v]psnr\" -f null - >$stats_out 2>&1";
+  my $compute = "ffmpeg -y -r $fps -i $self->{outdir}/enc.video.$suf -i $trunc -lavfi \"ssim;[0:v][1:v]psnr\" -f null - >$stats_out 2>&1";
   system($compute);
 
   #extract ssim, psnr from ffmpeg output
