@@ -10,7 +10,6 @@
 # that the elapsed time so far is at least equal to the timestamp of the tag.
 # It will also write normal "flv dump" info to STDERR, unless -q is specified.
 
-
 $quiet_mode = false
 def puts_info(stuff = nil)
   STDERR.puts(stuff) unless $quiet_mode
@@ -20,11 +19,11 @@ def error(msg); STDERR.puts msg; exit; end
 
 class IO
   def ui8; read(1).unpack('C').first; end
-  def ui16; read(2).unpack('n').first; end
-  def ui32; read(4).unpack('N').first; end
-  def ui24; ("\000" + read(3)).unpack('N').first; end
-  def si24; v = ui24; v >= (2**23) ? v-(2**24) : v; end
-  
+  def ui16; read(2).unpack('S>').first; end
+  def ui24; ("\000" + read(3)).unpack('L>').first; end
+  def ui32; read(4).unpack('L>').first; end
+  def si24; ("\000" + read(3)).unpack('l>').first; end
+    
   alias_method :__real_read, :read
 
   def read(amount)
@@ -596,7 +595,7 @@ while more_to_read
     puts_info "  Video codec: #{codec_id} (#{video_codecs[codec_id] || 'unknown'})"
     
     if codec_id == 4 #&& frame_type == 1 # vp6 keyframe
-      stream_bytes = input_file.read(9)
+      stream_bytes = input_file.read(9).bytes.to_a
 
       vp6_frame_mode = (stream_bytes[1] >> 7) & 1
       vp6_q_param = (stream_bytes[1] >> 1) & 0b00111111
