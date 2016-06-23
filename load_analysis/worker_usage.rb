@@ -1,19 +1,5 @@
-# For now only do this for a few main clouds - us-east, eu-dublin, and us-oregon
 
-Worker.logger.level = 10
-OutputMediaFile.logger.level = 10
-
-cloud_list = [1,3,6]
-first_day = '2016-02-01'
-last_day = '2016-02-29'
-
-puts ['DATE', 'CLOUD_ID', 'WORKER_ID', 'INSTANCE_TYPE', 'LIFECYCLE', 'LAUNCHED', 'KILLED', 'TARGET_LOAD', 'MAX_LOAD', 'TARGET_LOAD_SECONDS', 'MAX_LOAD_SECONDS', 'OUTPUT_COUNT', 'USED_LOAD_SECONDS'].join("\t")
-
-cloud_list.each do |cloud_id|
-  run_report(cloud_id, first_day, last_day)
-end; nil
-
-
+# Get worker usage data per-day, per-cloud.
 
 #############################################################
 
@@ -121,4 +107,24 @@ def generate_daily_stats(cloud_id, day)
 
   log "  Total outputs for day: #{total_output_count}"
 end
+
+#############################################################
+#############################################################
+#############################################################
+
+
+# For now only do this for a few main clouds - us-east, eu-dublin, and us-oregon
+
+Worker.logger.level = 10
+OutputMediaFile.logger.level = 10
+
+cloud_list = [1,3,6]
+first_day = '2016-05-31'
+last_day = '2016-05-31'
+
+puts ['DATE', 'CLOUD_ID', 'WORKER_ID', 'INSTANCE_TYPE', 'LIFECYCLE', 'LAUNCHED', 'KILLED', 'TARGET_LOAD', 'MAX_LOAD', 'TARGET_LOAD_SECONDS', 'MAX_LOAD_SECONDS', 'OUTPUT_COUNT', 'USED_LOAD_SECONDS'].join("\t")
+
+cloud_list.each do |cloud_id|
+  run_report(cloud_id, first_day, last_day)
+end; nil
 
