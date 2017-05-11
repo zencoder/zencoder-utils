@@ -330,7 +330,7 @@ def read_item(prefix = '', max_size = nil)
   kind = @input_file.read(4)
   return nil if kind.to_s.length < 4
   
-  if kind == 'LIST'
+  if kind == 'LIST' || kind == 'RIFF'
     read_list(prefix)
   else
     read_chunk(kind, prefix)
