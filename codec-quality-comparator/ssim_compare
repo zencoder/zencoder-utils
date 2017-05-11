@@ -1,0 +1,104 @@
+#!/usr/bin/env ruby
+
+require 'erb'
+require 'json'
+
+def escape_for_single_quotes(filename)
+  filename.gsub("'","'\\\\''")
+end
+
+def single_quote(filename)
+  "'" + escape_for_single_quotes(filename) + "'"
+end
+
+def mkfifo(filename)
+  `mkfifo #{single_quote(filename)} 2>/dev/null`
+end
+
+def run_comparison(reference_file, degraded_file)
+  ref_fifo = "/tmp/ref.fifo.y4m"
+  mkfifo(ref_fifo)
+  ref_decode_pid = Process.spawn("ffmpeg -i #{single_quote(reference_file)} -pix_fmt yuv444p -f yuv4mpegpipe -y #{single_quote(ref_fifo)}", :err => "/dev/null", :close_others => true)
+
+  deg_fifo = "/tmp/deg.fifo.y4m"
+  mkfifo(deg_fifo)
+  deg_decode_pid = Process.spawn("ffmpeg -i #{single_quote(degraded_file)} -pix_fmt yuv444p -f yuv4mpegpipe -y #{single_quote(deg_fifo)}", :err => "/dev/null", :close_others => true)
+
+  result_read, result_write = IO.pipe
+  compare_pid = Process.spawn("./compare_444p_psnr #{single_quote(ref_fifo)} #{single_quote(deg_fifo)}", :out => result_write, :close_others => true)
+  result_write.close
+
+  result_data = result_read.read
+  result_read.close
+
+  Process.waitpid(ref_decode_pid)
+  Process.waitpid(deg_decode_pid)
+  Process.waitpid(compare_pid)
+
+  result_data
+end
+
+def parse_data(data)
+  # like:
+  # Frame 0 PSNR (5ms): luma = inf, chroma_cb = inf, chroma_cr = inf
+  # Frame 0 SSIM (514ms): luma = 1.00000, chroma_cb = 1.00000, chroma_cr = 1.00000
+  # Frame 0 MS-SSIM (5233ms): luma = 1.00000, chroma_cb = 1.00000, chroma_cr = 1.00000
+  #
+  frame = 0
+  parsed_data = {
+    :psnr => [],
+    :ssim => [],
+    :ms_ssim => []
+  }
+  data.each do |line|
+    if line =~ /Frame (\d+)/
+      frame = $1
+    end
+
+    value = line.split(", ")[0].split(": ")[-1].split(" = ")[-1].to_f rescue 0
+    if line.include?("PSNR")
+      parsed_data[:psnr] << value
+    elsif line.include?("MS-SSIM")
+      parsed_data[:ms_ssim] << value
+    elsif line.include?("SSIM")
+      parsed_data[:ssim] << value
+      puts "Frame #{frame} ssim = #{value}"
+    end
+  end
+  parsed_data
+end
+
+def middle_99(data)
+  exclude = (data.length * 0.005).floor
+  data.sort[exclude..-(exclude+1)]
+end
+
+
+####################################################################
+
+reference_filename = ARGV[0]
+comparison_filename = ARGV[1]
+[reference_filename,comparison_filename].each { |f| raise "File #{f} not found!" unless File.exist?(f) }
+
+STDERR.puts "Analyzing #{comparison_filename}"
+# info = {
+#   :filename => comparison_filename,
+#   :keyframes => keyframes_for_file(comparison_filename),
+#   :frame_sizes => frame_sizes_for_file(comparison_filename)
+# }
+#
+# info[:bitrate_data] = info[:frame_sizes].map { |s| s * 8 * 29.97 }
+
+raw_data = run_comparison(reference_filename, comparison_filename).split("\n")
+
+data = parse_data(raw_data)
+
+min_value = data[:ssim].min
+max_value = data[:ssim].max
+
+sum = data[:ssim].inject(0.0) { |s,v| s+v }
+mean = sum.to_f / data[:ssim].length
+
+puts "Mean SSIM Y:#{mean}"
+
+
