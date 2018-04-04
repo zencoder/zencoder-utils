@@ -3454,6 +3454,122 @@ class AvccSubBox < SubBox
 
   def print_pps_units(prefix = '')
     @pps_units.each do |unit_data|
+      header_byte = unit_data[0,1].unpack('C').first
+      if header_byte >= 128
+        print prefix
+        cputs "Invalid nal unit!", :red
+        next
+      end
+      ref_idc = header_byte >> 5
+      unit_type = header_byte & 0b11111
+
+      unit = Bitstream.new(unit_data[1..-1], 0)
+      pps_id = unit.ue_v
+      sps_id = unit.ue_v
+
+      print prefix
+      cputs "PPS ID: #{pps_id}", :dark_gray
+      print prefix
+      cputs "SPS ID: #{sps_id}", :dark_gray
+
+      entropy_coding_mode_flag = unit.getbits(1)
+      pic_order_present_flag = unit.getbits(1)
+      num_slice_groups_minus1 = unit.ue_v
+
+      entropy_coding_modes = ["Exp-Golomb/CAVLC", "CABAC"]
+      print prefix+'  '
+      cputs "Entropy Coding Mode: #{entropy_coding_mode_flag} (#{entropy_coding_modes[entropy_coding_mode_flag]})", :dark_gray
+      print prefix+'  '
+      cputs "Pic Order Present (in slice headers): #{pic_order_present_flag}", :dark_gray
+      print prefix+'  '
+      cputs "Num Slice Groups: #{num_slice_groups_minus1 + 1}", :dark_gray
+
+      run_length_minus1 = []
+      top_left = []
+      bottom_right = []
+      slice_group_change_direction_flag = nil
+      slice_group_change_rate_minus1 = nil
+      pic_size_in_map_units_minus1 = nil
+      slice_group_id = []
+
+      slice_group_map_types = ["Interleaved", "Dispersed", "Foreground/Leftover", "Changing(3)", "Changing(4)", "Changing(5)", "Explicit"]
+
+      # Slice group map units are specified as follows.
+      # – If frame_mbs_only_flag is equal to 0 and mb_adaptive_frame_field_flag is equal to 1 and the coded picture is a frame, the slice group map units are macroblock pair units.
+      # – Otherwise, if frame_mbs_only_flag is equal to 1 or a coded picture is a field, the slice group map units are units of macroblocks.
+      # – Otherwise (frame_mbs_only_flag is equal to 0 and mb_adaptive_frame_field_flag is equal to 0 and the coded picture is a frame), the slice group map units are units of two macroblocks that are vertically contiguous as in a frame macroblock pair of an MBAFF frame.
+      # run_length_minus1[ i ] is used to specify the number of consecutive slice group map units to be assigned to the i-th slice group in raster scan order of slice group map units. The value of run_length_minus1[ i ] shall be in the range of 0 to PicSizeInMapUnits - 1, inclusive.
+      # top_left[ i ] and bottom_right[ i ] specify the top-left and bottom-right corners of a rectangle, respectively. top_left[ i ] and bottom_right[ i ] are slice group map unit positions in a raster scan of the picture for the slice group map units. For each rectangle i, all of the following constraints shall be obeyed by the values of the syntax elements top_left[ i ] and bottom_right[ i ]
+      # - top_left[ i ] shall be less than or equal to bottom_right[ i ] and bottom_right[ i ] shall be less than PicSizeInMapUnits.
+      # - ( top_left[ i ] % PicWidthInMbs ) shall be less than or equal to the value of ( bottom_right[ i ] % PicWidthInMbs ).
+      # slice_group_change_direction_flag is used with slice_group_map_type to specify the refined map type when slice_group_map_type is 3, 4, or 5.
+      # slice_group_change_rate_minus1 is used to specify the variable SliceGroupChangeRate. SliceGroupChangeRate specifies the multiple in number of slice group map units by which the size of a slice group can change from one picture to the next. The value of slice_group_change_rate_minus1 shall be in the range of 0 to PicSizeInMapUnits – 1, inclusive. The SliceGroupChangeRate variable is specified as follows:
+      #     SliceGroupChangeRate = slice_group_change_rate_minus1 + 1 (7-9)
+      # pic_size_in_map_units_minus1 is used to specify the number of slice group map units in the picture. pic_size_in_map_units_minus1 shall be equal to PicSizeInMapUnits - 1.
+      # slice_group_id[ i ] identifies a slice group of the i-th slice group map unit in raster scan order. The size of the slice_group_id[ i ] syntax element is Ceil( Log2( num_slice_groups_minus1 + 1 ) ) bits. The value of slice_group_id[ i ] shall be in the range of 0 to num_slice_groups_minus1, inclusive.
+
+      if num_slice_groups_minus1 > 0
+        slice_group_map_type = unit.ue_v
+        print prefix+'    '
+        cputs "Slice Group Map Type: #{slice_group_map_type} (#{slice_group_map_types[slice_group_map_type]})", :dark_gray
+
+        case slice_group_map_type
+        when 0
+          (num_slice_groups_minus1 + 1).times do
+            run_length_minus1 << unit.ue_v
+          end
+        when 1
+          # Nothing defined for a value of 1.
+        when 2
+          (num_slice_groups_minus1 + 1).times do
+            top_left << unit.ue_v
+            bottom_right << unit.ue_v
+          end
+        when 3,4,5
+          slice_group_change_direction_flag = unit.getbits(1)
+          slice_group_change_rate_minus1 = unit.ue_v
+        when 6
+          pic_size_in_map_units_minus1 = unit.ue_v
+          (pic_size_in_map_units_minus1 + 1).times do
+            slice_group_id MM unit.getbits(1)
+          end
+        end
+      end
+
+      num_ref_idx_l0_active_minus1 = unit.ue_v
+      num_ref_idx_l1_active_minus1 = unit.ue_v
+      weighted_pred_flag = unit.getbits(1)
+      weighted_bipred_idc = unit.getbits(2)
+      pic_init_qp_minus26 = unit.se_v
+      pic_init_qs_minus26 = unit.se_v
+      chroma_qp_index_offset = unit.se_v
+      deblocking_filter_control_present_flag = unit.getbits(1)
+      constrained_intra_pred_flag = unit.getbits(1)
+      redundant_pic_cnt_present_flag = unit.getbits(1)
+
+      weighted_pred_types = ["Not applied to P/SP slices", "Applied to P/SP slices"]
+      weighted_bipred_types = ["Default weighted for B slices", "Explicit weighted for B slices", "Implicit weighted for B slices"]
+
+      print prefix+'  '
+      cputs "Num Ref IDX List 0: #{num_ref_idx_l0_active_minus1 + 1}", :dark_gray
+      print prefix+'  '
+      cputs "Num Ref IDX List 1: #{num_ref_idx_l1_active_minus1 + 1}", :dark_gray
+      print prefix+'  '
+      cputs "Weighted Pred Flag: #{weighted_pred_flag} (#{weighted_pred_types[weighted_pred_flag]})", :dark_gray
+      print prefix+'  '
+      cputs "Weighted BiPred IDC: #{weighted_bipred_idc} (#{weighted_bipred_types[weighted_bipred_idc]})", :dark_gray
+      print prefix+'  '
+      cputs "Initial QP for Slices: #{pic_init_qp_minus26 + 26}", :dark_gray
+      print prefix+'  '
+      cputs "Initial QS for Slices: #{pic_init_qs_minus26 + 26}", :dark_gray
+      print prefix+'  '
+      cputs "Chroma QP Index Offset: #{chroma_qp_index_offset}", :dark_gray
+      print prefix+'  '
+      cputs "Deblocking filter control present (in slice headers): #{deblocking_filter_control_present_flag}", :dark_gray
+      print prefix+'  '
+      cputs "Constrained Intra Prediction: #{constrained_intra_pred_flag}", :dark_gray
+      print prefix+'  '
+      cputs "Redundant Pic Count Present (in slice headers): #{redundant_pic_cnt_present_flag}", :dark_gray
     end
   end
 
