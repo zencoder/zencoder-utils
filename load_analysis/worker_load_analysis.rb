@@ -30,10 +30,10 @@ cloud = numeric_arg_with_default(1).round
 start_hour = numeric_arg_with_default(0)
 point_count = numeric_arg_with_default(1440)
 
-TIME_OFFSET = -7.hours
+TIME_OFFSET = -5.hours
 CLOUD_ID = cloud
 ACCOUNT_ID = :all
-# ACCOUNT_ID = 8501
+# ACCOUNT_ID = 238354 # dbornstein
 EXCLUDE_LOW_PRIORITY = true
 EXCLUDE_TEST_JOBS = true
 
