@@ -1561,6 +1561,7 @@ class SttsBox < Box
     @flags = nil
     @entry_count = 0
     @entries = []
+    @cached_sample_times = []
     super
   end
 
@@ -1610,13 +1611,26 @@ class SttsBox < Box
   end
 
   def lookup_sample_time(sample_number)
-    sample_index = sample_number - 1
-    entry = @entries.detect { |e| e[:sample_offset] <= sample_index && (e[:sample_offset] + e[:count] - 1) >= sample_index }
-    if entry
-      entry[:time_offset] + (sample_index - entry[:sample_offset]) * entry[:duration]
-    else
-      nil
+    cached_sample_times[sample_number]
+  end
+
+  # On long files it's slow to look up each sample time individually, so turn this into a cached index.
+  def cached_sample_times
+    return @cached_sample_times if @cached_sample_times
+    @cached_sample_times = Array.new(@sample_count)
+
+    cur_time = 0
+    @entries.each do |e|
+      sample_offset = e[:sample_offset]
+      cur_time = e[:time_offset]
+      duration = e[:duration]
+      e[:count].times do |index|
+        @cached_sample_times[sample_offset + index] = cur_time
+        cur_time += duration
+      end
     end
+
+    @cached_sample_times
   end
 
 end
