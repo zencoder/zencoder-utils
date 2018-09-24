@@ -1562,6 +1562,7 @@ class SttsBox < Box
     @entry_count = 0
     @entries = []
     @cached_sample_times = []
+    @sample_count = 0
     super
   end
 
@@ -1582,6 +1583,7 @@ class SttsBox < Box
       }
       sample_offset += count
       time_offset += count*duration
+      @sample_count += count
     end
   end
 
