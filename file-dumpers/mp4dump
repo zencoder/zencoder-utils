@@ -3015,6 +3015,27 @@ class DolbyConfigBox < SubBox
   ]
 
   CHANNEL_COUNTS = [2, 1, 2, 3, 3, 4, 4, 5]
+
+  BITSTREAM_MODES = [
+    "Main audio service: complete main (CM)",
+    "Main audio service: music and effects (ME)",
+    "Associated service: visually impaired (VI)",
+    "Associated service: hearing impaired (HI)",
+    "Associated service: dialogue (D)",
+    "Associated service: commentary (C)",
+    "Associated service: emergency (E)"
+    # mode 7 is either voiceover or karaoke, depending on acmod value.
+  ]
+
+  def get_service_type(bsmod, acmod)
+    st = BITSTREAM_MODES[bsmod]
+
+    # Note: for bsmod == 7 and acmod == 0, service type is undefined
+    st ||= "Associated service: voice over (VO)" if acmod == 1
+    st ||= "Main audio service: karaoke" if acmod > 1
+
+    st
+  end
 end
 
 class Dac3SubBox < DolbyConfigBox
@@ -3042,13 +3063,12 @@ class Dac3SubBox < DolbyConfigBox
     640
   ]
 
-
   def read_header_data(stream)
     return if @data_size < 3
     dac3_data = Bitstream.new(stream.read(3))
     @fscod = dac3_data.getbits(2)
     bsid  = dac3_data.getbits(5)
-    bsmod = dac3_data.getbits(3)
+    @bsmod = dac3_data.getbits(3)
     @acmod = dac3_data.getbits(3)
     @lfeon = dac3_data.getbits(1)
     @bit_rate_code = dac3_data.getbits(5)
@@ -3063,6 +3083,8 @@ class Dac3SubBox < DolbyConfigBox
     cputs "Channel Config: #{CHANNEL_CONFIGS[@acmod]}#{',LFE' if @lfeon == 1}", :dark_gray
     print prefix
     cputs "Bit Rate: #{BIT_RATES[@bit_rate_code]}", :dark_gray
+    print prefix
+    cputs "Service Type: #{get_service_type(@bsmod, @acmod)}", :dark_gray
   end
 end
 
@@ -3149,6 +3171,8 @@ class Dec3SubBox < DolbyConfigBox
         print indent_prefix
         cputs "Dependent Channel Locations: #{dependent_channel_locations(stream[:chan_loc])}", :dark_gray
       end
+      print indent_prefix
+      cputs "Service Type: #{get_service_type(stream[:bsmod], stream[:acmod])}", :dark_gray
     end
   end
 end
@@ -3975,6 +3999,12 @@ class HvccSubBox < SubBox
       'Entropy coding synchronization based / WPP: Wavefront Parallel Processing'
   ]
 
+  CONSTANT_FPS_OPTIONS = [
+    'No',
+    'Yes',
+    'Per Temporal Layer'
+  ]
+
   NALU_TYPE = [
       'NAL_SLICE_TRAIL_N',
       'NAL_SLICE_TRAIL_R',
@@ -4031,7 +4061,7 @@ class HvccSubBox < SubBox
     @bit_depth_luma_minus8 = stream.ui8 & 0x07
     @bit_depth_chroma_minus8 = stream.ui8 & 0x07
 
-    @average_fps = stream.ui16
+    @average_fps = stream.ui16 # In units of frames per 256 seconds
     next_byte = stream.ui8
     @constant_fps = (next_byte >> 6) & 0x03
     @number_temporal_layers = (next_byte >> 3) & 0x07
@@ -4104,9 +4134,9 @@ class HvccSubBox < SubBox
     cputs "Bit Depth: #{@bit_depth_luma_minus8 + 8} (luma), #{@bit_depth_chroma_minus8 + 8} (chroma)", :dark_gray
 
     print prefix
-    cputs "Average FPS: #{@average_fps}", :dark_gray
+    cputs "Average FPS: #{@average_fps}/256 (#{@average_fps.to_f / 256})", :dark_gray
     print prefix
-    cputs "Constant FPS: #{@constant_fps}", :dark_gray
+    cputs "Constant FPS: #{@constant_fps} (#{CONSTANT_FPS_OPTIONS[@constant_fps]})", :dark_gray
     print prefix
     cputs "Num Temporal Layers: #{@number_temporal_layers}", :dark_gray
     print prefix
