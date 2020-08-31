@@ -563,10 +563,10 @@ end
 class TrunBox < Box
   handles 'trun', 'Track Fragment Run Box'
 
-  attr_accessor :flags, :data_offset, :first_sample_flags, :entry_count, :entries
+  attr_accessor :version, :flags, :data_offset, :first_sample_flags, :entry_count, :entries
 
   def read_data(stream)
-    version = stream.ui8
+    @version = stream.ui8
     @flags = stream.ui24
 
     @data_offset_present = @flags & 0x01
@@ -597,7 +597,9 @@ class TrunBox < Box
       entry[:duration] = stream.ui32 if @sample_duration_present > 0
       entry[:size] = stream.ui32 if @sample_size_present > 0
       entry[:flags] = stream.ui32 if @sample_flags_present > 0
-      entry[:composition_time_offset] = stream.si32 if @sample_composition_time_offsets_present > 0
+      if @sample_composition_time_offsets_present > 0
+        entry[:composition_time_offset] = @version == 1 ? stream.si32 : stream.ui32
+      end
 
       if @sample_composition_time_offsets_present > 0
         entry[:calculated_dts] = dts
@@ -610,6 +612,10 @@ class TrunBox < Box
   end
 
   def print_extra_info(prefix = '')
+    if $VERBOSE
+      print prefix
+      cputs "Version: #{@version}", :dark_gray
+    end
     if @data_offset_present > 0
       print prefix
       cputs "Data Offset: #{@data_offset}", :dark_gray
@@ -909,28 +915,62 @@ class TencBox < SubBox
     @is_encrypted = nil
     @iv_length = nil
     @key_id = nil
+    @default_constant_iv_size = nil
+    @default_constant_iv = nil
+    @default_crypt_byte_block = nil
+    @default_skip_byte_block = nil
+
     super
   end
 
   def read_data(stream)
     @version, @flags = stream.ui8, stream.ui24
-    @is_encrypted = stream.ui24
-    @iv_size = stream.ui8
-    @key_id = stream.read(16)
+    reserved = stream.ui8
+    if @version == 0
+      reserved2 = stream.ui8
+    else # version > 0, per ISO-23001-7, 2016
+      crypt_skip_info = stream.ui8
+      @default_crypt_byte_block = crypt_skip_info >> 4
+      @default_skip_byte_block = crypt_skip_info & 0xf
+    end
+    @is_encrypted = stream.ui8
+    @default_iv_size = stream.ui8
+    @default_key_id = stream.read(16)
+    if @is_encrypted == 1 && @default_iv_size == 0
+      @default_constant_iv_size = stream.ui8
+      @default_constant_iv = stream.read(@default_constant_iv_size)
+    end
   end
 
   def print_extra_info(prefix = '')
     print prefix
     cputs "Is Encrypted?: #{(@is_encrypted == 1) ? 'Yes' : 'No'}", :dark_gray
+    if @is_encrypted > 0
+      # Per ISO-23001-7, 2016
+      print prefix
+      cputs "  Pattern-Based Encryption?: #{(@version == 1) ? 'Yes' : 'No'}", :dark_gray
+      if @default_crypt_byte_block
+        print prefix
+        cputs "  Default Crypted Byte Blocks: #{@default_crypt_byte_block}", :dark_gray
+        print prefix
+        cputs "  Default Skip Byte Blocks: #{@default_skip_byte_block}", :dark_gray
+      end
+    end
     if @is_encrypted > 1
       # Per 14496-12, amendment 3.
       print prefix
       cputs "  Algorithm ID: #{@is_encrypted}", :dark_gray
     end
     print prefix
-    cputs "IV Size: #{@iv_size} bytes (#{@iv_size * 8} bits)", :dark_gray
+    cputs "IV Size: #{@default_iv_size} bytes (#{@default_iv_size * 8} bits)", :dark_gray
     print prefix
-    cputs "Key ID: #{@key_id.unpack('H*').first}", :dark_gray
+    cputs "Key ID: #{@default_key_id.unpack('H*').first}", :dark_gray
+    if @default_constant_iv_size
+      print prefix
+      cputs "Constant IV Size: #{@default_constant_iv_size} bytes (#{@default_constant_iv_size * 8} bits)", :dark_gray
+      print prefix
+      cputs "Constant IV: #{@default_constant_iv.unpack('H*').first}", :dark_gray
+    end
   end
 end
 
